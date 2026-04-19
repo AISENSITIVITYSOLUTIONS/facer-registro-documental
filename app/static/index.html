@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FaceR Local Console</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <p class="eyebrow">FaceR Local</p>
+        <h1>Valida el backend documental desde una consola visual.</h1>
+        <p class="lede">
+          Esta interfaz vive dentro de FastAPI para desarrollo local. Sirve para comprobar salud,
+          consultar usuarios y ejecutar el flujo documental sin depender de otro frontend.
+        </p>
+      </section>
+
+      <section class="panel grid-two">
+        <article class="card accent">
+          <div class="card-head">
+            <h2>Estado del servicio</h2>
+            <button id="health-button" type="button">Probar health</button>
+          </div>
+          <pre id="health-output" class="output">Sin ejecutar</pre>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <h2>Usuario</h2>
+            <button id="user-button" type="button">Consultar</button>
+          </div>
+          <label for="user-id">User ID</label>
+          <input id="user-id" name="user-id" type="number" min="1" value="1" />
+          <pre id="user-output" class="output">Sin ejecutar</pre>
+        </article>
+      </section>
+
+      <section class="panel">
+        <article class="card wide">
+          <div class="card-head">
+            <h2>Cargar documento</h2>
+            <button id="upload-button" type="button">Subir</button>
+          </div>
+          <form id="upload-form" class="form-grid">
+            <label for="upload-user-id">User ID</label>
+            <input id="upload-user-id" name="user_id" type="number" min="1" value="1" />
+
+            <label for="country">País</label>
+            <select id="country" name="country">
+              <option value="MX">México</option>
+              <option value="CO">Colombia</option>
+            </select>
+
+            <label for="document-type">Tipo documental</label>
+            <select id="document-type" name="document_type">
+              <option value="INE">INE</option>
+              <option value="PASSPORT_MX">Pasaporte MX</option>
+              <option value="CEDULA_CO">Cédula CO</option>
+              <option value="PASSPORT_CO">Pasaporte CO</option>
+            </select>
+
+            <label for="document-file">Imagen</label>
+            <input id="document-file" name="file" type="file" accept="image/png,image/jpeg" />
+          </form>
+          <section class="camera-shell">
+            <div class="camera-head">
+              <h3>Captura local</h3>
+              <p>Abre la camara, recorta el documento en cuadro y usa la foto como entrada del OCR.</p>
+            </div>
+            <div class="camera-grid">
+              <div class="camera-stage">
+                <video id="camera-preview" autoplay playsinline muted></video>
+                <canvas id="camera-canvas" hidden></canvas>
+                <img id="camera-shot" alt="Captura del documento" hidden />
+              </div>
+              <div class="camera-actions">
+                <button id="camera-start" type="button">Abrir camara</button>
+                <button id="camera-capture" type="button">Capturar foto</button>
+                <button id="camera-stop" type="button">Cerrar camara</button>
+                <button id="camera-clear" type="button">Limpiar captura</button>
+                <p id="camera-status" class="camera-status">Camara inactiva</p>
+              </div>
+            </div>
+          </section>
+          <pre id="upload-output" class="output">Sin ejecutar</pre>
+        </article>
+      </section>
+
+      <section class="panel grid-two">
+        <article class="card">
+          <div class="card-head">
+            <h2>Procesar</h2>
+            <button id="process-button" type="button">Procesar documento</button>
+          </div>
+          <label for="process-document-id">Document ID</label>
+          <input id="process-document-id" type="number" min="1" />
+          <pre id="process-output" class="output">Sin ejecutar</pre>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <h2>Resultados</h2>
+            <button id="results-button" type="button">Ver resultados</button>
+          </div>
+          <label for="results-document-id">Document ID</label>
+          <input id="results-document-id" type="number" min="1" />
+          <pre id="results-output" class="output">Sin ejecutar</pre>
+        </article>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
