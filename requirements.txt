@@ -9,3 +9,6 @@ google-cloud-storage==2.19.0
 google-cloud-vision==3.10.1
 rapidfuzz==3.13.0
 pillow==11.2.1
+numpy==2.2.5
+pytesseract==0.3.13
+pytest==8.3.5

@@ -1,5 +1,6 @@
 from app.schemas.documents import (
     AuditEventResponse,
+    DocumentCaptureAnalysisResponse,
     DocumentConfirmResponse,
     DocumentExtractedFields,
     DocumentProcessResponse,
@@ -11,6 +12,7 @@ from app.schemas.users import UserDocumentStatusResponse, UserResponse
 
 __all__ = [
     "AuditEventResponse",
+    "DocumentCaptureAnalysisResponse",
     "DocumentConfirmResponse",
     "DocumentExtractedFields",
     "DocumentProcessResponse",

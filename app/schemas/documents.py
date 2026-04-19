@@ -22,6 +22,21 @@ class DocumentExtractedFields(BaseModel):
     expiration_date: date | None = None
 
 
+class DocumentCaptureAnalysisResponse(BaseModel):
+    file_size_bytes: int
+    width: int
+    height: int
+    brightness: float
+    contrast: float
+    sharpness: float
+    glare_score: float
+    quality_score: float
+    meets_minimum: bool
+    recapture_recommended: bool
+    recommended_action: str
+    preprocessing_enabled: bool
+
+
 class DocumentUploadResponse(BaseModel):
     id: int
     uuid: str

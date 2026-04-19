@@ -5,10 +5,12 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.db import get_db
-from app.models import DocumentProcessingStatus, ValidationStatus
+from app.models import ComparisonStatus, DocumentProcessingStatus, ValidationStatus
 from app.repositories import DocumentRepository, UserRepository
 from app.schemas import (
+    DocumentCaptureAnalysisResponse,
     DocumentConfirmResponse,
     DocumentExtractedFields,
     DocumentProcessResponse,
@@ -26,6 +28,32 @@ document_repository = DocumentRepository()
 audit_service = AuditService()
 comparison_service = ComparisonService()
 parsing_service = ParsingService()
+
+
+@router.post("/analyze-capture", response_model=DocumentCaptureAnalysisResponse)
+async def analyze_capture(
+    file: UploadFile = File(...),
+) -> DocumentCaptureAnalysisResponse:
+    image_bytes = await validate_upload_file(file)
+    quality = evaluate_image_quality(image_bytes)
+    recommended_action = "continue"
+    if quality["recapture_recommended"]:
+        recommended_action = "recapture"
+
+    return DocumentCaptureAnalysisResponse(
+        file_size_bytes=len(image_bytes),
+        width=quality["width"],
+        height=quality["height"],
+        brightness=quality["brightness"],
+        contrast=quality["contrast"],
+        sharpness=quality["sharpness"],
+        glare_score=quality["glare_score"],
+        quality_score=quality["quality_score"],
+        meets_minimum=quality["meets_minimum"],
+        recapture_recommended=quality["recapture_recommended"],
+        recommended_action=recommended_action,
+        preprocessing_enabled=settings.enable_image_preprocessing,
+    )
 
 
 @router.post("/upload", response_model=DocumentUploadResponse, status_code=status.HTTP_201_CREATED)
@@ -83,6 +111,7 @@ async def upload_document(
                 "document_type": document_type_enum.value,
                 "capture_quality_score": quality["quality_score"],
                 "recapture_recommended": quality["recapture_recommended"],
+                "storage_backend": settings.normalized_storage_backend,
             },
         )
         db.commit()
@@ -127,11 +156,11 @@ def process_document(document_id: int, db: Session = Depends(get_db)) -> Documen
 
         validation_status = ValidationStatus(parsing_result["validation_status"])
         comparison_status = comparison_result["comparison_status"]
-        if comparison_status == "mismatch":
+        if comparison_status == ComparisonStatus.MISMATCH.value:
             validation_status = ValidationStatus.INVALID
-        elif comparison_status == "low_match" or document.capture_quality_score is None:
+        elif comparison_status == ComparisonStatus.LOW_MATCH.value or document.capture_quality_score is None:
             validation_status = ValidationStatus.NEEDS_REVIEW
-        elif document.capture_quality_score < 0.45:
+        elif document.capture_quality_score < settings.min_capture_quality_score:
             validation_status = ValidationStatus.NEEDS_REVIEW
         elif validation_status == ValidationStatus.PENDING:
             validation_status = ValidationStatus.PENDING
@@ -167,6 +196,8 @@ def process_document(document_id: int, db: Session = Depends(get_db)) -> Documen
                 "comparison_status": comparison_result["comparison_status"],
                 "comparison_score": comparison_result["comparison_score"],
                 "validation_status": validation_status.value,
+                "ocr_engine": ocr_result.get("engine"),
+                "preprocessing_variant": ocr_result.get("preprocessing_variant"),
             },
         )
         db.commit()
@@ -244,7 +275,11 @@ def confirm_document(document_id: int, db: Session = Depends(get_db)) -> Documen
         )
 
     next_validation_status = ValidationStatus.NEEDS_REVIEW
-    if document.comparison_status in {"exact_match", "high_match", "medium_match"}:
+    if document.comparison_status in {
+        ComparisonStatus.EXACT_MATCH,
+        ComparisonStatus.HIGH_MATCH,
+        ComparisonStatus.MEDIUM_MATCH,
+    }:
         next_validation_status = ValidationStatus.VALID
 
     try:
@@ -292,8 +327,6 @@ async def retry_document(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El documento ya fue confirmado.")
 
     retry_count = document_repository.count_audit_events(db, document_id, "document_retry")
-    from app.config import settings
-
     if retry_count >= settings.max_retry_count:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Se alcanzó el máximo de reintentos permitido.")
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -15,7 +16,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "FaceR Document Validation API"
-    app_version: str = "2.0.0"
+    app_version: str = "2.1.0"
     environment: str = Field(default="development")
     debug: bool = False
     api_v1_prefix: str = "/api/v1"
@@ -30,10 +31,19 @@ class Settings(BaseSettings):
     cloud_sql_connection_name: str | None = None
     database_url: str | None = None
 
+    storage_backend: str = "local"
+    storage_local_dir: str = "./data/storage"
     gcp_project_id: str = ""
     gcs_bucket_name: str = ""
     gcs_documents_prefix: str = "documents"
+
+    default_ocr_engine: str = "tesseract"
     vision_feature_type: str = "DOCUMENT_TEXT_DETECTION"
+    tesseract_languages: str = "spa+eng"
+    tesseract_page_segmentation_mode: int = 6
+    enable_image_preprocessing: bool = True
+    auto_create_db_schema: bool = True
+    request_timeout_seconds: int = 30
 
     max_upload_size_bytes: int = 8 * 1024 * 1024
     min_image_width: int = 900
@@ -41,9 +51,6 @@ class Settings(BaseSettings):
     min_capture_quality_score: float = 0.45
     max_retry_count: int = 3
     allowed_mime_types: str = "image/jpeg,image/png,image/jpg"
-
-    default_ocr_engine: str = "google_vision"
-    request_timeout_seconds: int = 30
 
     @computed_field  # type: ignore[misc]
     @property
@@ -66,6 +73,21 @@ class Settings(BaseSettings):
     @property
     def allowed_mime_types_list(self) -> list[str]:
         return [item.strip().lower() for item in self.allowed_mime_types.split(",") if item.strip()]
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def normalized_storage_backend(self) -> str:
+        return self.storage_backend.strip().lower()
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def normalized_ocr_engine(self) -> str:
+        return self.default_ocr_engine.strip().lower()
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def storage_local_path(self) -> Path:
+        return Path(self.storage_local_dir).expanduser().resolve()
 
 
 @lru_cache(maxsize=1)

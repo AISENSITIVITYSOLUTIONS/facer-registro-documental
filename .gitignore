@@ -75,6 +75,12 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 
+# Local runtime data for document processing
+data/
+*.db
+*.sqlite
+*.sqlite3
+
 # dotenv environment variable files
 .env
 .env.*
