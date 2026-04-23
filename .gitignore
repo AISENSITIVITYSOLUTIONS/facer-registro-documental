@@ -72,6 +72,12 @@ web_modules/
 __pycache__/
 *.py[cod]
 *.so
+.venv/
+.paddle/
+.paddleocr/
+*.db
+local_storage/
+tmp/
 .pytest_cache/
 .mypy_cache/
 

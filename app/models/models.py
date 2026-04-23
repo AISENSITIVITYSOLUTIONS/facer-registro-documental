@@ -10,6 +10,19 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db import Base
 
 
+def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
+    return [member.value for member in enum_cls]
+
+
+def _sqlalchemy_enum(enum_cls: type[enum.Enum], *, name: str) -> Enum:
+    return Enum(
+        enum_cls,
+        name=name,
+        values_callable=_enum_values,
+        validate_strings=True,
+    )
+
+
 class CountryCode(str, enum.Enum):
     MX = "MX"
     CO = "CO"
@@ -83,13 +96,15 @@ class IdentityDocument(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     uuid: Mapped[str] = mapped_column(String(36), nullable=False, unique=True, default=lambda: str(uuid.uuid4()))
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
-    country: Mapped[CountryCode] = mapped_column(Enum(CountryCode, name="country_code_enum"), nullable=False)
+    country: Mapped[CountryCode] = mapped_column(_sqlalchemy_enum(CountryCode, name="country_code_enum"), nullable=False)
     document_type: Mapped[DocumentType] = mapped_column(
-        Enum(DocumentType, name="document_type_enum"), nullable=False
+        _sqlalchemy_enum(DocumentType, name="document_type_enum"),
+        nullable=False,
     )
     full_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     first_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    address: Mapped[str | None] = mapped_column(String(255), nullable=True)
     birth_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     sex: Mapped[str | None] = mapped_column(String(20), nullable=True)
     national_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -102,13 +117,13 @@ class IdentityDocument(Base):
     extracted_fields_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     extraction_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     validation_status: Mapped[ValidationStatus] = mapped_column(
-        Enum(ValidationStatus, name="validation_status_enum"),
+        _sqlalchemy_enum(ValidationStatus, name="validation_status_enum"),
         nullable=False,
         default=ValidationStatus.PENDING,
         server_default=ValidationStatus.PENDING.value,
     )
     comparison_status: Mapped[ComparisonStatus | None] = mapped_column(
-        Enum(ComparisonStatus, name="comparison_status_enum"),
+        _sqlalchemy_enum(ComparisonStatus, name="comparison_status_enum"),
         nullable=True,
     )
     comparison_score: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -116,7 +131,7 @@ class IdentityDocument(Base):
     capture_quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     ocr_engine: Mapped[str | None] = mapped_column(String(50), nullable=True)
     status: Mapped[DocumentProcessingStatus] = mapped_column(
-        Enum(DocumentProcessingStatus, name="document_processing_status_enum"),
+        _sqlalchemy_enum(DocumentProcessingStatus, name="document_processing_status_enum"),
         nullable=False,
         default=DocumentProcessingStatus.UPLOADED,
         server_default=DocumentProcessingStatus.UPLOADED.value,

@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
-from app.models import DocumentAuditLog, IdentityDocument
+from app.models import DocumentAuditLog, IdentityDocument, User
 
 
 class DocumentRepository:
@@ -20,10 +20,43 @@ class DocumentRepository:
         stmt = select(IdentityDocument).where(IdentityDocument.id == document_id)
         return db.execute(stmt).scalar_one_or_none()
 
+    def get_by_id_and_institution_id(
+        self,
+        db: Session,
+        document_id: int,
+        institution_id: int,
+    ) -> IdentityDocument | None:
+        stmt = (
+            select(IdentityDocument)
+            .join(User, IdentityDocument.user_id == User.id)
+            .where(
+                IdentityDocument.id == document_id,
+                User.institution_id == institution_id,
+            )
+        )
+        return db.execute(stmt).scalar_one_or_none()
+
     def get_latest_by_user_id(self, db: Session, user_id: int) -> IdentityDocument | None:
         stmt = (
             select(IdentityDocument)
             .where(IdentityDocument.user_id == user_id)
+            .order_by(desc(IdentityDocument.created_at), desc(IdentityDocument.id))
+        )
+        return db.execute(stmt).scalars().first()
+
+    def get_latest_by_user_id_and_institution_id(
+        self,
+        db: Session,
+        user_id: int,
+        institution_id: int,
+    ) -> IdentityDocument | None:
+        stmt = (
+            select(IdentityDocument)
+            .join(User, IdentityDocument.user_id == User.id)
+            .where(
+                IdentityDocument.user_id == user_id,
+                User.institution_id == institution_id,
+            )
             .order_by(desc(IdentityDocument.created_at), desc(IdentityDocument.id))
         )
         return db.execute(stmt).scalars().first()

@@ -1,6 +1,7 @@
 const pretty = (value) => JSON.stringify(value, null, 2);
 let cameraStream = null;
 let capturedFile = null;
+const authStorageKey = "facer-local-auth";
 
 const setOutput = (elementId, value) => {
   document.getElementById(elementId).textContent =
@@ -45,6 +46,39 @@ const parseResponse = async (response) => {
     throw error;
   }
 };
+
+const loadAuthFields = () => {
+  try {
+    const saved = JSON.parse(localStorage.getItem(authStorageKey) || "{}");
+    document.getElementById("api-key").value = saved.apiKey || "";
+    document.getElementById("institution-code").value = saved.institutionCode || "";
+  } catch (error) {
+    localStorage.removeItem(authStorageKey);
+  }
+};
+
+const getAuthState = () => {
+  const apiKey = document.getElementById("api-key").value.trim();
+  const institutionCode = document.getElementById("institution-code").value.trim();
+  localStorage.setItem(authStorageKey, JSON.stringify({ apiKey, institutionCode }));
+  return { apiKey, institutionCode };
+};
+
+const buildProtectedHeaders = () => {
+  const { apiKey, institutionCode } = getAuthState();
+  if (!apiKey) {
+    throw new Error("Captura la API key antes de llamar endpoints protegidos.");
+  }
+  if (!institutionCode) {
+    throw new Error("Captura el institution code antes de llamar endpoints protegidos.");
+  }
+  return {
+    "X-API-Key": apiKey,
+    "X-Institution-Code": institutionCode,
+  };
+};
+
+loadAuthFields();
 
 document.getElementById("camera-start").addEventListener("click", async () => {
   try {
@@ -129,7 +163,9 @@ document.getElementById("user-button").addEventListener("click", async () => {
   try {
     const userId = document.getElementById("user-id").value;
     setOutput("user-output", "Consultando...");
-    const response = await fetch(`/api/v1/users/${userId}`);
+    const response = await fetch(`/api/v1/users/${userId}`, {
+      headers: buildProtectedHeaders(),
+    });
     setOutput("user-output", await parseResponse(response));
   } catch (error) {
     setOutput("user-output", error.message);
@@ -150,6 +186,7 @@ document.getElementById("upload-button").addEventListener("click", async () => {
     const response = await fetch("/api/v1/documents/upload", {
       method: "POST",
       body: formData,
+      headers: buildProtectedHeaders(),
     });
     const body = await parseResponse(response);
     setOutput("upload-output", body);
@@ -169,6 +206,7 @@ document.getElementById("process-button").addEventListener("click", async () => 
     setOutput("process-output", "Procesando...");
     const response = await fetch(`/api/v1/documents/${documentId}/process`, {
       method: "POST",
+      headers: buildProtectedHeaders(),
     });
     setOutput("process-output", await parseResponse(response));
   } catch (error) {
@@ -180,7 +218,9 @@ document.getElementById("results-button").addEventListener("click", async () => 
   try {
     const documentId = document.getElementById("results-document-id").value;
     setOutput("results-output", "Consultando...");
-    const response = await fetch(`/api/v1/documents/${documentId}/results`);
+    const response = await fetch(`/api/v1/documents/${documentId}/results`, {
+      headers: buildProtectedHeaders(),
+    });
     setOutput("results-output", await parseResponse(response));
   } catch (error) {
     setOutput("results-output", error.message);

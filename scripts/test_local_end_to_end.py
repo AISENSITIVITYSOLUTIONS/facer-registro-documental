@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+import os
 from pathlib import Path
 import sys
 
@@ -9,7 +10,9 @@ from PIL import Image, ImageDraw, ImageFont
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT_DIR))
+os.environ.setdefault("AUTH_API_KEY", "local-dev-change-me")
 
+from app.config import settings
 from app.db import Base, SessionLocal, engine
 from app.main import app
 from app.models import Institution, User
@@ -74,9 +77,14 @@ def main() -> None:
     image_bytes = build_sample_image()
 
     client = TestClient(app)
+    headers = {
+        "X-API-Key": settings.auth_api_key,
+        "X-Institution-Code": "LOCAL-DEMO",
+    }
 
     upload_response = client.post(
         "/api/v1/documents/upload",
+        headers=headers,
         data={
             "user_id": str(user_id),
             "country": "MX",
@@ -89,7 +97,10 @@ def main() -> None:
     upload_response.raise_for_status()
     upload_payload = upload_response.json()
 
-    process_response = client.post(f"/api/v1/documents/{upload_payload['id']}/process")
+    process_response = client.post(
+        f"/api/v1/documents/{upload_payload['id']}/process",
+        headers=headers,
+    )
     process_response.raise_for_status()
     process_payload = process_response.json()
 

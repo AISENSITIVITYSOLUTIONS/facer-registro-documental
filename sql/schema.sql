@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS identity_documents (
     full_name VARCHAR(200) NULL,
     first_name VARCHAR(120) NULL,
     last_name VARCHAR(120) NULL,
+    address VARCHAR(255) NULL,
     birth_date DATE NULL,
     sex VARCHAR(20) NULL,
     national_id VARCHAR(50) NULL,

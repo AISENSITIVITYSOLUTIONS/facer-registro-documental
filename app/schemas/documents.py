@@ -56,6 +56,7 @@ class DocumentResultsResponse(BaseModel):
     user_id: int
     country: CountryCode
     document_type: DocumentType
+    address: str | None = None
     status: DocumentProcessingStatus
     validation_status: ValidationStatus
     comparison_status: ComparisonStatus | None = None

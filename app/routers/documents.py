@@ -17,6 +17,7 @@ from app.schemas import (
     DocumentRetryResponse,
     DocumentUploadResponse,
 )
+from app.security import RequestContext, get_request_context
 from app.services import AuditService, ComparisonService, OCRService, ParsingService, StorageService
 from app.utils import evaluate_image_quality, validate_country_document_type, validate_upload_file
 
@@ -35,9 +36,10 @@ async def upload_document(
     country: str = Form(...),
     document_type: str = Form(...),
     file: UploadFile = File(...),
+    request_context: RequestContext = Depends(get_request_context),
     db: Session = Depends(get_db),
 ) -> DocumentUploadResponse:
-    user = user_repository.get_by_id(db, user_id)
+    user = user_repository.get_by_id_and_institution_id(db, user_id, request_context.institution_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado.")
 
@@ -95,14 +97,18 @@ async def upload_document(
 
 
 @router.post("/{document_id}/process", response_model=DocumentProcessResponse)
-def process_document(document_id: int, db: Session = Depends(get_db)) -> DocumentProcessResponse:
-    document = document_repository.get_by_id(db, document_id)
+def process_document(
+    document_id: int,
+    request_context: RequestContext = Depends(get_request_context),
+    db: Session = Depends(get_db),
+) -> DocumentProcessResponse:
+    document = document_repository.get_by_id_and_institution_id(db, document_id, request_context.institution_id)
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Documento no encontrado.")
     if document.status == DocumentProcessingStatus.CONFIRMED:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El documento ya fue confirmado.")
 
-    user = user_repository.get_by_id(db, document.user_id)
+    user = user_repository.get_by_id_and_institution_id(db, document.user_id, request_context.institution_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado.")
 
@@ -146,6 +152,7 @@ def process_document(document_id: int, db: Session = Depends(get_db)) -> Documen
             full_name=extracted_fields.get("full_name"),
             first_name=extracted_fields.get("first_name"),
             last_name=extracted_fields.get("last_name"),
+            address=extracted_fields.get("address"),
             birth_date=extracted_fields.get("birth_date"),
             sex=extracted_fields.get("sex"),
             national_id=extracted_fields.get("national_id"),
@@ -200,8 +207,12 @@ def process_document(document_id: int, db: Session = Depends(get_db)) -> Documen
 
 
 @router.get("/{document_id}/results", response_model=DocumentResultsResponse)
-def get_document_results(document_id: int, db: Session = Depends(get_db)) -> DocumentResultsResponse:
-    document = document_repository.get_by_id(db, document_id)
+def get_document_results(
+    document_id: int,
+    request_context: RequestContext = Depends(get_request_context),
+    db: Session = Depends(get_db),
+) -> DocumentResultsResponse:
+    document = document_repository.get_by_id_and_institution_id(db, document_id, request_context.institution_id)
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Documento no encontrado.")
 
@@ -215,6 +226,7 @@ def get_document_results(document_id: int, db: Session = Depends(get_db)) -> Doc
         user_id=document.user_id,
         country=document.country,
         document_type=document.document_type,
+        address=document.address,
         status=document.status,
         validation_status=document.validation_status,
         comparison_status=document.comparison_status,
@@ -229,8 +241,12 @@ def get_document_results(document_id: int, db: Session = Depends(get_db)) -> Doc
 
 
 @router.post("/{document_id}/confirm", response_model=DocumentConfirmResponse)
-def confirm_document(document_id: int, db: Session = Depends(get_db)) -> DocumentConfirmResponse:
-    document = document_repository.get_by_id(db, document_id)
+def confirm_document(
+    document_id: int,
+    request_context: RequestContext = Depends(get_request_context),
+    db: Session = Depends(get_db),
+) -> DocumentConfirmResponse:
+    document = document_repository.get_by_id_and_institution_id(db, document_id, request_context.institution_id)
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Documento no encontrado.")
     if document.status != DocumentProcessingStatus.PROCESSED:
@@ -287,9 +303,10 @@ def confirm_document(document_id: int, db: Session = Depends(get_db)) -> Documen
 async def retry_document(
     document_id: int,
     file: UploadFile = File(...),
+    request_context: RequestContext = Depends(get_request_context),
     db: Session = Depends(get_db),
 ) -> DocumentRetryResponse:
-    document = document_repository.get_by_id(db, document_id)
+    document = document_repository.get_by_id_and_institution_id(db, document_id, request_context.institution_id)
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Documento no encontrado.")
     if document.status == DocumentProcessingStatus.CONFIRMED:
@@ -317,6 +334,7 @@ async def retry_document(
             document,
             source_image_gcs_path=source_image_gcs_path,
             capture_quality_score=quality["quality_score"],
+            address=None,
             extracted_text_raw=None,
             extracted_fields_json=None,
             extraction_confidence=None,

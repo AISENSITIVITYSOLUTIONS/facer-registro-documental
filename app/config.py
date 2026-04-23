@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     debug: bool = False
     api_v1_prefix: str = "/api/v1"
     port: int = 8080
+    auth_api_key: str = ""
 
     db_host: str = "127.0.0.1"
     db_port: int = 3306
