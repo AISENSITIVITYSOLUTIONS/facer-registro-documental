@@ -72,6 +72,8 @@ def main() -> None:
     parsing_result = parsing_service.parse_document(
         document_type=DocumentType.INE,
         raw_text=ocr_result["text"],
+        ocr_lines=ocr_result.get("lines"),
+        ocr_hints=ocr_result.get("field_hints"),
     )
 
     print("OCR engine:", ocr_result["engine"])

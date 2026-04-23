@@ -56,6 +56,7 @@ class OCRService:
             ) from exc
 
         lines = self._normalize_result(raw_result)
+        field_hints = self._extract_ine_field_hints(prepared)
         text = "\n".join(line["text"] for line in lines if line["text"]).strip()
         confidence = self._compute_average_confidence(lines)
 
@@ -64,8 +65,51 @@ class OCRService:
             "confidence": confidence,
             "engine": "paddleocr",
             "lines": lines,
+            "field_hints": field_hints,
             "preprocessing": prepared["metadata"],
         }
+
+    def _extract_ine_field_hints(self, prepared: dict) -> dict[str, list[str]]:
+        source = prepared.get("detail_bgr")
+        if source is None:
+            return {}
+
+        regions = {
+            "name": (0.27, 0.26, 0.60, 0.55),
+            "address": (0.27, 0.44, 0.66, 0.66),
+            "document_number": (0.26, 0.58, 0.82, 0.70),
+            "curp": (0.26, 0.63, 0.70, 0.76),
+            "birth_date": (0.72, 0.22, 0.98, 0.42),
+            "birth_date_alt": (0.24, 0.69, 0.63, 0.85),
+            "expiration_date": (0.62, 0.72, 0.98, 0.90),
+        }
+
+        extracted: dict[str, list[str]] = {}
+        for key, region in regions.items():
+            roi = self._crop_relative_region(source, region)
+            if roi is None:
+                continue
+            lines = self._ocr_region_texts(roi)
+            if lines:
+                extracted[key] = lines
+        return extracted
+
+    def _ocr_region_texts(self, image_bgr) -> list[str]:
+        raw_result = self.ocr.ocr(image_bgr, cls=settings.paddleocr_use_angle_cls)
+        lines = self._normalize_result(raw_result)
+        return [line["text"] for line in lines if line.get("text")]
+
+    @staticmethod
+    def _crop_relative_region(image_bgr, region: tuple[float, float, float, float]):
+        height, width = image_bgr.shape[:2]
+        x1, y1, x2, y2 = region
+        left = max(0, min(width, int(width * x1)))
+        top = max(0, min(height, int(height * y1)))
+        right = max(left + 1, min(width, int(width * x2)))
+        bottom = max(top + 1, min(height, int(height * y2)))
+        if right <= left or bottom <= top:
+            return None
+        return image_bgr[top:bottom, left:right]
 
     @staticmethod
     def _normalize_result(raw_result: list | None) -> list[dict]:

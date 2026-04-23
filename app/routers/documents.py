@@ -119,6 +119,8 @@ def process_document(document_id: int, db: Session = Depends(get_db)) -> Documen
         parsing_result = parsing_service.parse_document(
             document_type=document.document_type,
             raw_text=ocr_result["text"],
+            ocr_lines=ocr_result.get("lines"),
+            ocr_hints=ocr_result.get("field_hints"),
         )
         extracted_fields: dict[str, Any] = parsing_result["fields"]
         extracted_fields_json = jsonable_encoder(extracted_fields)

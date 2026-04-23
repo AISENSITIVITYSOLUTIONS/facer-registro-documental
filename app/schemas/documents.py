@@ -12,6 +12,7 @@ class DocumentExtractedFields(BaseModel):
     full_name: str | None = None
     first_name: str | None = None
     last_name: str | None = None
+    address: str | None = None
     birth_date: date | None = None
     sex: str | None = None
     national_id: str | None = None

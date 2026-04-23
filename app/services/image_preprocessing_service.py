@@ -22,13 +22,18 @@ class ImagePreprocessingService:
                 cropped = True
 
         enhanced_bgr = self._enhance_for_ocr(working_bgr)
+        detail_bgr = self._build_detail_image(working_bgr)
 
         return {
             "original_bgr": original_bgr,
+            "working_bgr": working_bgr,
             "processed_bgr": enhanced_bgr,
+            "detail_bgr": detail_bgr,
             "metadata": {
                 "original_shape": list(original_bgr.shape),
+                "working_shape": list(working_bgr.shape),
                 "processed_shape": list(enhanced_bgr.shape),
+                "detail_shape": list(detail_bgr.shape),
                 "document_cropped": cropped,
             },
         }
@@ -132,3 +137,11 @@ class ImagePreprocessingService:
         )
 
         return cv2.cvtColor(sharpened, cv2.COLOR_GRAY2BGR)
+
+    @staticmethod
+    def _build_detail_image(image_bgr: np.ndarray) -> np.ndarray:
+        gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+        upscaled = cv2.resize(gray, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+        denoised = cv2.bilateralFilter(upscaled, 7, 50, 50)
+        contrast = cv2.equalizeHist(denoised)
+        return cv2.cvtColor(contrast, cv2.COLOR_GRAY2BGR)
