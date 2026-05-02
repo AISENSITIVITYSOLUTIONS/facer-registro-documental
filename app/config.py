@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     allowed_mime_types: str = "image/jpeg,image/png,image/jpg"
 
     api_key: str = ""  # Required for production. Set via API_KEY env var.
+    cors_origins: str = "*"  # Comma-separated allowed origins. Use "*" for dev, restrict in production.
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def cors_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     @computed_field  # type: ignore[misc]
     @property
