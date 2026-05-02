@@ -516,7 +516,23 @@ function renderResults() {
   if (!r) return;
 
   const fields = r.extracted_fields || {};
-  const fieldLabels: Record<string, string> = {
+
+  // Prioritize INE-specific fields if available
+  const ineFieldLabels: Record<string, string> = {
+    nombre: "Nombre(s)",
+    apellido_paterno: "Apellido paterno",
+    apellido_materno: "Apellido materno",
+    nombre_completo: "Nombre completo",
+    nacionalidad: "Nacionalidad",
+    fecha_nacimiento: "Fecha de nacimiento",
+    curp: "CURP",
+    domicilio: "Domicilio",
+    sexo: "Sexo",
+    clave_elector: "Clave de elector",
+    seccion: "Sección",
+  };
+
+  const genericFieldLabels: Record<string, string> = {
     full_name: "Nombre completo",
     first_name: "Nombre(s)",
     last_name: "Apellido(s)",
@@ -529,6 +545,10 @@ function renderResults() {
     issue_date: "Fecha de emisión",
     expiration_date: "Fecha de expiración",
   };
+
+  // Use INE fields if nombre_completo or curp is present (INE document)
+  const isINE = fields.nombre_completo || fields.nombre || fields.curp;
+  const fieldLabels = isINE ? ineFieldLabels : genericFieldLabels;
 
   const statusColors: Record<string, string> = {
     valid: "bg-facer-success/20 text-facer-success",
@@ -555,13 +575,14 @@ function renderResults() {
   const validationClass = statusColors[r.validation_status] || statusColors.pending;
   const validationLabel = statusLabels[r.validation_status] || r.validation_status;
 
-  const fieldRows = Object.entries(fields)
-    .filter(([, v]) => v !== null && v !== "")
+  // Only show fields that have a label defined (hide internal/duplicate fields)
+  const fieldRows = Object.entries(fieldLabels)
+    .filter(([k]) => fields[k] !== null && fields[k] !== undefined && fields[k] !== "")
     .map(
-      ([k, v]) => `
+      ([k, label]) => `
       <div class="flex justify-between items-start py-2.5 border-b border-facer-border/50 last:border-0">
-        <span class="text-sm text-facer-text-muted">${fieldLabels[k] || k}</span>
-        <span class="text-sm font-medium text-facer-text text-right max-w-[60%]">${v}</span>
+        <span class="text-sm text-facer-text-muted">${label}</span>
+        <span class="text-sm font-medium text-facer-text text-right max-w-[60%]">${fields[k]}</span>
       </div>
     `,
     )
@@ -581,7 +602,7 @@ function renderResults() {
         <!-- Scores -->
         <div class="grid grid-cols-3 gap-2 mb-4">
           <div class="bg-facer-surface rounded-xl p-3 text-center border border-facer-border">
-            <div class="text-lg font-semibold text-facer-text">${r.extraction_confidence !== null ? Math.round(r.extraction_confidence) + "%" : "—"}</div>
+            <div class="text-lg font-semibold text-facer-text">${r.extraction_confidence !== null ? Math.round(r.extraction_confidence * 100) + "%" : "—"}</div>
             <div class="text-xs text-facer-text-muted">Confianza OCR</div>
           </div>
           <div class="bg-facer-surface rounded-xl p-3 text-center border border-facer-border">
