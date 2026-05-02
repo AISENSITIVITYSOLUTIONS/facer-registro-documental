@@ -9,11 +9,13 @@ from app.models.models import (
     User,
     ValidationStatus,
 )
+from app.models.documento_ine import DocumentoINEMexico
 
 __all__ = [
     "ComparisonStatus",
     "CountryCode",
     "DocumentAuditLog",
+    "DocumentoINEMexico",
     "DocumentProcessingStatus",
     "DocumentType",
     "IdentityDocument",

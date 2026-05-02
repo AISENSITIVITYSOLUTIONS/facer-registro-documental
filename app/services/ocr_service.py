@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import os
+import tempfile
 from collections.abc import Iterable
 from io import BytesIO
 from typing import Any
@@ -51,6 +54,19 @@ class OCRService:
             return [{"name": "original", "bytes": image_bytes}]
         return self.preprocessor.build_variants(image_bytes)
 
+    @staticmethod
+    def _create_vision_client():
+        """Create Vision client using base64 credentials or ADC."""
+        creds_b64 = settings.google_credentials_base64
+        if creds_b64:
+            creds_json = base64.b64decode(creds_b64)
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json", mode="wb")
+            tmp.write(creds_json)
+            tmp.close()
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = tmp.name
+
+        return vision.ImageAnnotatorClient()
+
     def _extract_with_google_vision(self, image_bytes: bytes) -> dict[str, Any]:
         if vision is None:
             raise HTTPException(
@@ -59,7 +75,7 @@ class OCRService:
             )
 
         if self._google_client is None:
-            self._google_client = vision.ImageAnnotatorClient()
+            self._google_client = self._create_vision_client()
 
         image = vision.Image(content=image_bytes)
 
@@ -71,7 +87,7 @@ class OCRService:
         if response.error.message:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="No fue posible procesar OCR con Google Vision.",
+                detail=f"No fue posible procesar OCR con Google Vision: {response.error.message}",
             )
 
         full_text = response.full_text_annotation.text or ""

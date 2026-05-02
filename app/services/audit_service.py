@@ -22,3 +22,11 @@ class AuditService:
         db.add(audit_log)
         db.flush()
         return audit_log
+
+    def count_retries(self, db: Session, document_id: int) -> int:
+        from sqlalchemy import func, select
+        stmt = select(func.count(DocumentAuditLog.id)).where(
+            DocumentAuditLog.document_id == document_id,
+            DocumentAuditLog.action == "document_retry",
+        )
+        return int(db.execute(stmt).scalar_one())

@@ -20,6 +20,19 @@ class DocumentExtractedFields(BaseModel):
     nationality: str | None = None
     issue_date: date | None = None
     expiration_date: date | None = None
+    # INE-specific fields
+    nombre: str | None = None
+    apellido_paterno: str | None = None
+    apellido_materno: str | None = None
+    nombre_completo: str | None = None
+    nacionalidad: str | None = None
+    fecha_nacimiento: date | None = None
+    domicilio: str | None = None
+    sexo: str | None = None
+    clave_elector: str | None = None
+    seccion: str | None = None
+
+    model_config = ConfigDict(extra="allow")
 
 
 class DocumentCaptureAnalysisResponse(BaseModel):

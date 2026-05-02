@@ -43,9 +43,12 @@ def _seed_default_data() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    if settings.auto_create_db_schema and settings.sqlalchemy_database_uri.startswith("sqlite"):
+    if settings.auto_create_db_schema:
+        # Import all models to ensure they are registered with Base
+        from app.models import DocumentoINEMexico  # noqa: F401
         Base.metadata.create_all(bind=engine)
-        _seed_default_data()
+        if settings.sqlalchemy_database_uri.startswith("sqlite"):
+            _seed_default_data()
     yield
 
 

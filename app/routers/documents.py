@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
@@ -7,8 +8,8 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import get_db
-from app.models import ComparisonStatus, DocumentProcessingStatus, ValidationStatus
-from app.repositories import DocumentRepository, UserRepository
+from app.models import ComparisonStatus, DocumentProcessingStatus, DocumentType, ValidationStatus
+from app.repositories import DocumentRepository, INERepository, UserRepository
 from app.schemas import (
     DocumentCaptureAnalysisResponse,
     DocumentConfirmResponse,
@@ -18,16 +19,18 @@ from app.schemas import (
     DocumentRetryResponse,
     DocumentUploadResponse,
 )
-from app.services import AuditService, ComparisonService, OCRService, ParsingService, StorageService
+from app.services import AuditService, ComparisonService, INEParsingService, OCRService, ParsingService, StorageService
 from app.utils import evaluate_image_quality, validate_country_document_type, validate_upload_file
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 user_repository = UserRepository()
 document_repository = DocumentRepository()
+ine_repository = INERepository()
 audit_service = AuditService()
 comparison_service = ComparisonService()
 parsing_service = ParsingService()
+ine_parsing_service = INEParsingService()
 
 
 @router.post("/analyze-capture", response_model=DocumentCaptureAnalysisResponse)
@@ -68,11 +71,11 @@ async def upload_document(
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado.")
 
-    from app.models import CountryCode, DocumentType
+    from app.models import CountryCode, DocumentType as DT
 
     try:
         country_enum = CountryCode(country)
-        document_type_enum = DocumentType(document_type)
+        document_type_enum = DT(document_type)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="País o tipo documental inválido.") from exc
 
@@ -144,17 +147,55 @@ def process_document(document_id: int, db: Session = Depends(get_db)) -> Documen
     try:
         image_bytes = storage_service.download_document_image(document.source_image_gcs_path)
         ocr_result = ocr_service.extract_text(image_bytes)
-        parsing_result = parsing_service.parse_document(
-            document_type=document.document_type,
-            raw_text=ocr_result["text"],
-        )
-        extracted_fields: dict[str, Any] = parsing_result["fields"]
+
+        # Use specialized INE parser for INE documents
+        if document.document_type == DocumentType.INE:
+            ine_fields = ine_parsing_service.parse(ocr_result["text"])
+            extracted_fields: dict[str, Any] = ine_fields
+
+            # Also save to documentos_ine_mexico table
+            ine_repository.create(
+                db,
+                usuario_id=document.user_id,
+                nombre=ine_fields.get("nombre"),
+                apellido_paterno=ine_fields.get("apellido_paterno"),
+                apellido_materno=ine_fields.get("apellido_materno"),
+                nombre_completo=ine_fields.get("nombre_completo"),
+                nacionalidad=ine_fields.get("nacionalidad"),
+                fecha_nacimiento=ine_fields.get("fecha_nacimiento"),
+                curp=ine_fields.get("curp"),
+                domicilio=ine_fields.get("domicilio"),
+                ocr_texto_original=ocr_result["text"],
+                ocr_confianza=ocr_result.get("confidence"),
+                imagen_frontal_url=document.source_image_gcs_path,
+                fecha_captura=datetime.utcnow(),
+                creado_por=f"user_{document.user_id}",
+            )
+
+            # Determine validation status for INE
+            has_name = bool(ine_fields.get("nombre_completo"))
+            has_curp = bool(ine_fields.get("curp"))
+            if has_name and has_curp:
+                validation_status = ValidationStatus.VALID
+            elif has_name or has_curp:
+                validation_status = ValidationStatus.NEEDS_REVIEW
+            else:
+                validation_status = ValidationStatus.INVALID
+        else:
+            # Use generic parser for other document types
+            parsing_result = parsing_service.parse_document(
+                document_type=document.document_type,
+                raw_text=ocr_result["text"],
+            )
+            extracted_fields = parsing_result["fields"]
+            validation_status = ValidationStatus(parsing_result["validation_status"])
+
+        # Compare against user
         comparison_result = comparison_service.compare_user_against_document(
             user=user,
             extracted_fields=extracted_fields,
         )
 
-        validation_status = ValidationStatus(parsing_result["validation_status"])
         comparison_status = comparison_result["comparison_status"]
         if comparison_status == ComparisonStatus.MISMATCH.value:
             validation_status = ValidationStatus.INVALID
@@ -162,8 +203,6 @@ def process_document(document_id: int, db: Session = Depends(get_db)) -> Documen
             validation_status = ValidationStatus.NEEDS_REVIEW
         elif document.capture_quality_score < settings.min_capture_quality_score:
             validation_status = ValidationStatus.NEEDS_REVIEW
-        elif validation_status == ValidationStatus.PENDING:
-            validation_status = ValidationStatus.PENDING
 
         document = document_repository.update(
             db,
@@ -266,52 +305,35 @@ def confirm_document(document_id: int, db: Session = Depends(get_db)) -> Documen
             detail="El documento debe estar procesado antes de confirmarse.",
         )
     if not document.extracted_fields_json:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No hay datos extraídos para confirmar.")
-
-    if document.validation_status == ValidationStatus.INVALID:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="El documento no puede confirmarse por inconsistencia documental.",
+            detail="No hay campos extraídos para confirmar.",
         )
 
-    next_validation_status = ValidationStatus.NEEDS_REVIEW
-    if document.comparison_status in {
-        ComparisonStatus.EXACT_MATCH,
-        ComparisonStatus.HIGH_MATCH,
-        ComparisonStatus.MEDIUM_MATCH,
-    }:
-        next_validation_status = ValidationStatus.VALID
+    document = document_repository.update(
+        db,
+        document,
+        status=DocumentProcessingStatus.CONFIRMED,
+        validation_status=ValidationStatus.VALID,
+    )
+    audit_service.log_document_action(
+        db=db,
+        document=document,
+        action="document_confirmed",
+        details={"document_id": document_id},
+    )
+    db.commit()
+    db.refresh(document)
 
-    try:
-        document = document_repository.update(
-            db,
-            document,
-            status=DocumentProcessingStatus.CONFIRMED,
-            validation_status=next_validation_status,
-        )
-        audit_service.log_document_action(
-            db=db,
-            document=document,
-            action="document_confirmed",
-            details={
-                "final_validation_status": next_validation_status.value,
-                "comparison_status": document.comparison_status.value if document.comparison_status else None,
-            },
-        )
-        db.commit()
-        db.refresh(document)
-        return DocumentConfirmResponse(
-            id=document.id,
-            uuid=document.uuid,
-            status=document.status,
-            validation_status=document.validation_status,
-            comparison_status=document.comparison_status,
-            comparison_score=document.comparison_score,
-            confirmed=True,
-        )
-    except Exception:
-        db.rollback()
-        raise
+    return DocumentConfirmResponse(
+        id=document.id,
+        uuid=document.uuid,
+        status=document.status,
+        validation_status=document.validation_status,
+        comparison_status=document.comparison_status,
+        comparison_score=document.comparison_score,
+        confirmed=True,
+    )
 
 
 @router.post("/{document_id}/retry", response_model=DocumentRetryResponse)
@@ -326,57 +348,59 @@ async def retry_document(
     if document.status == DocumentProcessingStatus.CONFIRMED:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El documento ya fue confirmado.")
 
-    retry_count = document_repository.count_audit_events(db, document_id, "document_retry")
+    retry_count = audit_service.count_retries(db, document_id)
     if retry_count >= settings.max_retry_count:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Se alcanzó el máximo de reintentos permitido.")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Se alcanzó el número máximo de reintentos.",
+        )
 
     image_bytes = await validate_upload_file(file)
     quality = evaluate_image_quality(image_bytes)
+
     storage_service = StorageService()
-    source_image_gcs_path = storage_service.upload_document_image(
+    new_path = storage_service.upload_document_image(
         image_bytes=image_bytes,
         content_type=file.content_type or "image/jpeg",
         country=document.country,
         document_type=document.document_type,
     )
 
-    try:
-        document = document_repository.update(
-            db,
-            document,
-            source_image_gcs_path=source_image_gcs_path,
-            capture_quality_score=quality["quality_score"],
-            extracted_text_raw=None,
-            extracted_fields_json=None,
-            extraction_confidence=None,
-            validation_status=(
-                ValidationStatus.NEEDS_REVIEW if quality["recapture_recommended"] else ValidationStatus.PENDING
-            ),
-            comparison_status=None,
-            comparison_score=None,
-            ocr_engine=None,
-            status=DocumentProcessingStatus.UPLOADED,
-        )
-        audit_service.log_document_action(
-            db=db,
-            document=document,
-            action="document_retry",
-            details={
-                "retry_number": retry_count + 1,
-                "capture_quality_score": quality["quality_score"],
-                "recapture_recommended": quality["recapture_recommended"],
-            },
-        )
-        db.commit()
-        db.refresh(document)
-        return DocumentRetryResponse(
-            id=document.id,
-            uuid=document.uuid,
-            status=document.status,
-            source_image_gcs_path=document.source_image_gcs_path,
-            capture_quality_score=document.capture_quality_score,
-            retry_count=retry_count + 1,
-        )
-    except Exception:
-        db.rollback()
-        raise
+    document = document_repository.update(
+        db,
+        document,
+        source_image_gcs_path=new_path,
+        capture_quality_score=quality["quality_score"],
+        status=DocumentProcessingStatus.UPLOADED,
+        validation_status=ValidationStatus.PENDING,
+        extracted_text_raw=None,
+        extracted_fields_json=None,
+        extraction_confidence=None,
+        comparison_status=None,
+        comparison_score=None,
+        full_name=None,
+        first_name=None,
+        last_name=None,
+        birth_date=None,
+        sex=None,
+        national_id=None,
+        document_number=None,
+        curp=None,
+    )
+    audit_service.log_document_action(
+        db=db,
+        document=document,
+        action="document_retry",
+        details={"retry_count": retry_count + 1},
+    )
+    db.commit()
+    db.refresh(document)
+
+    return DocumentRetryResponse(
+        id=document.id,
+        uuid=document.uuid,
+        status=document.status,
+        source_image_gcs_path=document.source_image_gcs_path,
+        capture_quality_score=document.capture_quality_score,
+        retry_count=retry_count + 1,
+    )

@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "FaceR Document Validation API"
-    app_version: str = "2.1.0"
+    app_version: str = "3.0.0"
     environment: str = Field(default="development")
     debug: bool = False
     api_v1_prefix: str = "/api/v1"
@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     enable_image_preprocessing: bool = True
     auto_create_db_schema: bool = True
     request_timeout_seconds: int = 30
+
+    google_credentials_base64: str = ""  # Base64-encoded service account JSON for Google Vision
 
     max_upload_size_bytes: int = 8 * 1024 * 1024
     min_image_width: int = 900
