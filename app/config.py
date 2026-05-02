@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     max_retry_count: int = 3
     allowed_mime_types: str = "image/jpeg,image/png,image/jpg"
 
+    api_key: str = ""  # Required for production. Set via API_KEY env var.
+
     @computed_field  # type: ignore[misc]
     @property
     def sqlalchemy_database_uri(self) -> str:

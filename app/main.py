@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 
 from app.config import settings
 from app.db import Base, engine
+from app.middleware.auth import api_key_auth
 from app.routers.documents import router as documents_router
 from app.routers.users import router as users_router
 
@@ -25,10 +26,20 @@ app = FastAPI(
 )
 
 
+# Public routes (no authentication required)
 @app.get("/health", tags=["health"])
 def health_check() -> dict[str, str]:
     return {"status": "ok", "service": settings.app_name, "version": settings.app_version}
 
 
-app.include_router(users_router, prefix=settings.api_v1_prefix)
-app.include_router(documents_router, prefix=settings.api_v1_prefix)
+# Protected routes (require API key via Authorization: Bearer <key>)
+app.include_router(
+    users_router,
+    prefix=settings.api_v1_prefix,
+    dependencies=[Depends(api_key_auth)],
+)
+app.include_router(
+    documents_router,
+    prefix=settings.api_v1_prefix,
+    dependencies=[Depends(api_key_auth)],
+)
