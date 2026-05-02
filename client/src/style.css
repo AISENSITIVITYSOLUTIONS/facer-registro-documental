@@ -1,0 +1,75 @@
+@import "tailwindcss";
+
+@theme {
+  --color-facer-bg: oklch(0.18 0.03 260);
+  --color-facer-surface: oklch(0.22 0.035 260);
+  --color-facer-card: oklch(0.25 0.04 260);
+  --color-facer-border: oklch(0.35 0.04 260);
+  --color-facer-accent: oklch(0.65 0.15 250);
+  --color-facer-accent-hover: oklch(0.72 0.15 250);
+  --color-facer-success: oklch(0.7 0.18 155);
+  --color-facer-warning: oklch(0.75 0.15 80);
+  --color-facer-error: oklch(0.65 0.2 25);
+  --color-facer-text: oklch(0.95 0.01 260);
+  --color-facer-text-muted: oklch(0.7 0.02 260);
+  --color-facer-gold: oklch(0.8 0.15 85);
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background: linear-gradient(160deg, oklch(0.12 0.04 260), oklch(0.18 0.03 260) 40%, oklch(0.15 0.035 270));
+  color: var(--color-facer-text);
+  font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+.camera-mirror {
+  transform: scaleX(-1);
+}
+
+@keyframes pulse-border {
+  0%, 100% { border-color: oklch(0.65 0.15 250 / 0.6); }
+  50% { border-color: oklch(0.8 0.15 250 / 0.9); }
+}
+
+.guide-overlay {
+  animation: pulse-border 2s ease-in-out infinite;
+}
+
+.fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, oklch(0.55 0.15 250), oklch(0.45 0.18 270));
+  transition: all 0.2s ease;
+}
+.btn-primary:hover {
+  background: linear-gradient(135deg, oklch(0.6 0.15 250), oklch(0.5 0.18 270));
+  transform: translateY(-1px);
+  box-shadow: 0 4px 20px oklch(0.5 0.15 260 / 0.3);
+}
+.btn-primary:active {
+  transform: translateY(0);
+}
+
+.btn-secondary {
+  background: oklch(0.25 0.04 260);
+  border: 1px solid oklch(0.35 0.04 260);
+  transition: all 0.2s ease;
+}
+.btn-secondary:hover {
+  background: oklch(0.3 0.04 260);
+  border-color: oklch(0.45 0.04 260);
+}
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: oklch(0.4 0.03 260); border-radius: 3px; }
