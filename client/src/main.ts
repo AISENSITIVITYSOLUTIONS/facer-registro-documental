@@ -10,6 +10,7 @@ import {
   type CaptureAnalysis,
 } from "./api";
 import { startCamera, type CameraInstance } from "./camera";
+import { compressImage, formatBytes, type CompressResult } from "./compress";
 
 // ── State ──────────────────────────────────────────────
 interface AppState {
@@ -20,6 +21,8 @@ interface AppState {
   camera: CameraInstance | null;
   capturedBlob: Blob | null;
   capturedUrl: string;
+  compressedBlob: Blob | null;
+  compressionInfo: CompressResult | null;
   analysis: CaptureAnalysis | null;
   results: ProcessResponse | null;
   error: string;
@@ -33,6 +36,8 @@ const state: AppState = {
   camera: null,
   capturedBlob: null,
   capturedUrl: "",
+  compressedBlob: null,
+  compressionInfo: null,
   analysis: null,
   results: null,
   error: "",
@@ -311,48 +316,85 @@ function renderReview() {
   const sendBtn = document.getElementById("rev-send") as HTMLButtonElement;
 
   if (state.capturedBlob) {
-    analyzeCapture(state.capturedBlob)
-      .then((analysis) => {
-        state.analysis = analysis;
-        const scorePercent = Math.round(analysis.quality_score * 100);
-        const scoreColor = analysis.meets_minimum ? "text-facer-success" : "text-facer-warning";
-        const scoreIcon = analysis.meets_minimum
-          ? `<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>`
-          : `<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>`;
+    // Run analysis and compression in parallel
+    const analysisPromise = analyzeCapture(state.capturedBlob).catch(() => null);
+    const compressionPromise = compressImage(state.capturedBlob, {
+      maxWidth: 1600,
+      maxHeight: 1200,
+      quality: 0.82,
+      maxSizeBytes: 1.5 * 1024 * 1024,
+    });
 
-        qualityEl.innerHTML = `
-          <div class="space-y-3">
-            <div class="flex items-center justify-between">
-              <span class="text-sm text-facer-text-muted">Calidad de imagen</span>
-              <span class="flex items-center gap-1.5 text-sm font-medium ${scoreColor}">
-                ${scoreIcon}
-                ${scorePercent}%
-              </span>
-            </div>
-            <div class="w-full h-2 bg-facer-card rounded-full overflow-hidden">
-              <div class="h-full rounded-full transition-all duration-500 ${analysis.meets_minimum ? "bg-facer-success" : "bg-facer-warning"}" style="width: ${scorePercent}%"></div>
-            </div>
-            <div class="grid grid-cols-3 gap-2 text-xs text-facer-text-muted">
-              <div class="bg-facer-card rounded-lg p-2 text-center">
-                <div class="font-medium text-facer-text">${analysis.width}x${analysis.height}</div>
-                <div>Resolución</div>
+    Promise.all([analysisPromise, compressionPromise])
+      .then(([analysis, compressionResult]) => {
+        state.compressionInfo = compressionResult;
+        state.compressedBlob = compressionResult.blob;
+
+        if (analysis) {
+          state.analysis = analysis;
+          const scorePercent = Math.round(analysis.quality_score * 100);
+          const scoreColor = analysis.meets_minimum ? "text-facer-success" : "text-facer-warning";
+          const scoreIcon = analysis.meets_minimum
+            ? `<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>`
+            : `<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>`;
+
+          qualityEl.innerHTML = `
+            <div class="space-y-3">
+              <div class="flex items-center justify-between">
+                <span class="text-sm text-facer-text-muted">Calidad de imagen</span>
+                <span class="flex items-center gap-1.5 text-sm font-medium ${scoreColor}">
+                  ${scoreIcon}
+                  ${scorePercent}%
+                </span>
               </div>
-              <div class="bg-facer-card rounded-lg p-2 text-center">
-                <div class="font-medium text-facer-text">${analysis.sharpness.toFixed(1)}</div>
-                <div>Nitidez</div>
+              <div class="w-full h-2 bg-facer-card rounded-full overflow-hidden">
+                <div class="h-full rounded-full transition-all duration-500 ${analysis.meets_minimum ? "bg-facer-success" : "bg-facer-warning"}" style="width: ${scorePercent}%"></div>
               </div>
-              <div class="bg-facer-card rounded-lg p-2 text-center">
-                <div class="font-medium text-facer-text">${analysis.brightness.toFixed(1)}</div>
-                <div>Brillo</div>
+              <div class="grid grid-cols-3 gap-2 text-xs text-facer-text-muted">
+                <div class="bg-facer-card rounded-lg p-2 text-center">
+                  <div class="font-medium text-facer-text">${analysis.width}x${analysis.height}</div>
+                  <div>Resolución</div>
+                </div>
+                <div class="bg-facer-card rounded-lg p-2 text-center">
+                  <div class="font-medium text-facer-text">${analysis.sharpness.toFixed(1)}</div>
+                  <div>Nitidez</div>
+                </div>
+                <div class="bg-facer-card rounded-lg p-2 text-center">
+                  <div class="font-medium text-facer-text">${analysis.brightness.toFixed(1)}</div>
+                  <div>Brillo</div>
+                </div>
+              </div>
+              <!-- Compression info -->
+              <div class="flex items-center justify-between bg-facer-card rounded-lg p-2 mt-2">
+                <span class="text-xs text-facer-text-muted">Compresión</span>
+                <span class="text-xs font-medium text-facer-accent">
+                  ${formatBytes(compressionResult.originalSize)} → ${formatBytes(compressionResult.compressedSize)}
+                  (${Math.round((1 - compressionResult.compressionRatio) * 100)}% reducido)
+                </span>
+              </div>
+              ${analysis.recapture_recommended ? `<p class="text-xs text-facer-warning text-center">Se recomienda recapturar para mejores resultados</p>` : ""}
+            </div>
+          `;
+        } else {
+          // Analysis failed but compression succeeded
+          qualityEl.innerHTML = `
+            <div class="space-y-2">
+              <p class="text-sm text-facer-warning">No se pudo analizar la calidad. Puedes enviar de todos modos.</p>
+              <div class="flex items-center justify-between bg-facer-card rounded-lg p-2">
+                <span class="text-xs text-facer-text-muted">Compresión</span>
+                <span class="text-xs font-medium text-facer-accent">
+                  ${formatBytes(compressionResult.originalSize)} → ${formatBytes(compressionResult.compressedSize)}
+                </span>
               </div>
             </div>
-            ${analysis.recapture_recommended ? `<p class="text-xs text-facer-warning text-center">Se recomienda recapturar para mejores resultados</p>` : ""}
-          </div>
-        `;
+          `;
+        }
         sendBtn.disabled = false;
       })
       .catch((err) => {
-        qualityEl.innerHTML = `<p class="text-sm text-facer-warning">No se pudo analizar la calidad: ${err.message}. Puedes enviar de todos modos.</p>`;
+        qualityEl.innerHTML = `<p class="text-sm text-facer-error">Error al preparar imagen: ${err.message}</p>`;
+        // Still allow sending with original blob
+        state.compressedBlob = state.capturedBlob;
         sendBtn.disabled = false;
       });
   }
@@ -360,6 +402,8 @@ function renderReview() {
   document.getElementById("rev-retake")!.addEventListener("click", () => {
     state.capturedBlob = null;
     state.capturedUrl = "";
+    state.compressedBlob = null;
+    state.compressionInfo = null;
     state.analysis = null;
     state.screen = "capture";
     render();
@@ -392,7 +436,7 @@ function renderProcessing() {
               <div class="w-6 h-6 rounded-full bg-facer-accent/20 flex items-center justify-center shrink-0">
                 <svg class="w-3.5 h-3.5 text-facer-accent animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
               </div>
-              <span class="text-facer-text-muted">Subiendo imagen...</span>
+              <span class="text-facer-text-muted">Subiendo imagen${state.compressionInfo ? ` (${formatBytes(state.compressionInfo.compressedSize)})` : ""}...</span>
             </div>
             <div id="step-ocr" class="flex items-center gap-3 text-sm opacity-40">
               <div class="w-6 h-6 rounded-full bg-facer-card flex items-center justify-center shrink-0">
@@ -426,8 +470,9 @@ async function runProcessing() {
   const spinIcon = `<div class="w-6 h-6 rounded-full bg-facer-accent/20 flex items-center justify-center shrink-0"><svg class="w-3.5 h-3.5 text-facer-accent animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg></div>`;
 
   try {
-    // Step 1: Upload
-    const uploadRes = await uploadDocument(state.userId, state.country, state.documentType, state.capturedBlob!);
+    // Step 1: Upload (use compressed blob if available, otherwise original)
+    const blobToUpload = state.compressedBlob || state.capturedBlob!;
+    const uploadRes = await uploadDocument(state.userId, state.country, state.documentType, blobToUpload);
     stepUpload.innerHTML = `${checkIcon}<span class="text-facer-success">Imagen subida</span>`;
 
     // Step 2: Process (OCR + parsing)
@@ -572,6 +617,8 @@ function renderResults() {
   document.getElementById("res-new")!.addEventListener("click", () => {
     state.capturedBlob = null;
     state.capturedUrl = "";
+    state.compressedBlob = null;
+    state.compressionInfo = null;
     state.analysis = null;
     state.results = null;
     state.screen = "select";
