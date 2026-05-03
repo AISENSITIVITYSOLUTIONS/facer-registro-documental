@@ -110,7 +110,7 @@ export async function uploadAndProcess(
 
 export async function healthCheck(): Promise<boolean> {
   try {
-    const res = await fetch(`${API_BASE_URL}/health`);
+    const res = await fetch(`${API_BASE_URL}/api/health`);
     return res.ok;
   } catch {
     return false;
