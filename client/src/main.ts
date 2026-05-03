@@ -496,12 +496,32 @@ async function runProcessing() {
       render();
     }, 800);
   } catch (err: any) {
+    // Show user-friendly error, never raw SQL or technical details
+    const rawMsg: string = err.message || "";
+    let friendlyMsg = "Ocurrió un error al procesar el documento.";
+    if (rawMsg.includes("foto más clara") || rawMsg.includes("OCR")) {
+      friendlyMsg = "No se pudo leer el documento. Intenta con una foto más clara y bien iluminada.";
+    } else if (rawMsg.includes("Usuario no encontrado")) {
+      friendlyMsg = "Tu sesión expiró. Inicia sesión de nuevo.";
+    } else if (rawMsg.includes("País") || rawMsg.includes("inválido")) {
+      friendlyMsg = "Tipo de documento no válido. Selecciona otro.";
+    } else if (rawMsg.includes("fetch") || rawMsg.includes("network") || rawMsg.includes("Failed")) {
+      friendlyMsg = "Error de conexión. Verifica tu internet e intenta de nuevo.";
+    }
     errorEl.classList.remove("hidden");
     errorEl.innerHTML = `
-      <p class="mb-3">${err.message || "Error desconocido"}</p>
+      <div class="bg-facer-error/10 border border-facer-error/30 rounded-xl p-4 mb-3">
+        <div class="flex items-center gap-2 mb-2">
+          <svg class="w-5 h-5 text-facer-error shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/>
+          </svg>
+          <span class="font-medium text-facer-error">Error</span>
+        </div>
+        <p class="text-sm text-facer-text">${friendlyMsg}</p>
+      </div>
       <div class="flex gap-2 justify-center">
-        <button id="proc-retry" class="btn-secondary px-4 py-2 rounded-lg text-sm cursor-pointer">Reintentar</button>
-        <button id="proc-back" class="btn-secondary px-4 py-2 rounded-lg text-sm cursor-pointer">Volver</button>
+        <button id="proc-retry" class="btn-primary px-5 py-2.5 rounded-xl text-white text-sm cursor-pointer border-0">Reintentar</button>
+        <button id="proc-back" class="btn-secondary px-5 py-2.5 rounded-xl text-sm cursor-pointer">Volver</button>
       </div>
     `;
     document.getElementById("proc-retry")?.addEventListener("click", () => {

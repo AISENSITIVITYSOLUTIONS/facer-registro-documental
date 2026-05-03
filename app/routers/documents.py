@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime
+import logging
+import traceback
+from datetime import date, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
@@ -22,6 +24,8 @@ from app.schemas import (
 from app.services import AuditService, ComparisonService, INEParsingService, OCRService, ParsingService, StorageService
 from app.utils import evaluate_image_quality, validate_country_document_type, validate_upload_file
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 user_repository = UserRepository()
@@ -33,6 +37,136 @@ parsing_service = ParsingService()
 ine_parsing_service = INEParsingService()
 
 
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+
+def _sanitize_for_json(data: dict[str, Any]) -> dict[str, Any]:
+    """Convert all non-JSON-serializable values (date, datetime, enum, etc.) to strings.
+
+    This is critical because ``extracted_fields_json`` is a JSON column in the DB
+    and Python ``date`` / ``datetime`` objects are **not** JSON serializable.
+    """
+    sanitized: dict[str, Any] = {}
+    for key, value in data.items():
+        if isinstance(value, datetime):
+            sanitized[key] = value.isoformat()
+        elif isinstance(value, date):
+            sanitized[key] = value.isoformat()  # "YYYY-MM-DD"
+        elif isinstance(value, dict):
+            sanitized[key] = _sanitize_for_json(value)
+        elif isinstance(value, (list, tuple)):
+            sanitized[key] = [
+                _sanitize_for_json(item)
+                if isinstance(item, dict)
+                else item.isoformat()
+                if isinstance(item, (date, datetime))
+                else item
+                for item in value
+            ]
+        elif hasattr(value, "value"):
+            # Handle enums
+            sanitized[key] = value.value
+        else:
+            sanitized[key] = value
+    return sanitized
+
+
+def _safe_date(value: Any) -> date | None:
+    """Safely convert a value to a ``date`` object for SQL Date columns."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value)
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def _safe_str(value: Any) -> str | None:
+    """Return *value* as a string or ``None``."""
+    if value is None:
+        return None
+    s = str(value).strip()
+    return s if s else None
+
+
+def _update_document_with_extraction(
+    db: Session,
+    document: Any,
+    extracted_fields: dict[str, Any],
+    ocr_result: dict[str, Any],
+    comparison_result: dict[str, Any],
+    validation_status: ValidationStatus,
+) -> Any:
+    """Persist OCR results into the ``identity_documents`` row.
+
+    All date values are sanitised before being stored in the JSON column.
+    """
+    sanitized_fields = _sanitize_for_json(extracted_fields)
+
+    return document_repository.update(
+        db,
+        document,
+        full_name=_safe_str(extracted_fields.get("full_name") or extracted_fields.get("nombre_completo")),
+        first_name=_safe_str(extracted_fields.get("first_name") or extracted_fields.get("nombre")),
+        last_name=_safe_str(extracted_fields.get("last_name") or extracted_fields.get("apellido_paterno")),
+        birth_date=_safe_date(extracted_fields.get("birth_date") or extracted_fields.get("fecha_nacimiento")),
+        sex=_safe_str(extracted_fields.get("sex") or extracted_fields.get("sexo")),
+        national_id=_safe_str(extracted_fields.get("national_id") or extracted_fields.get("clave_elector")),
+        document_number=_safe_str(extracted_fields.get("document_number")),
+        curp=_safe_str(extracted_fields.get("curp")),
+        nationality=_safe_str(extracted_fields.get("nationality") or extracted_fields.get("nacionalidad")),
+        issue_date=_safe_date(extracted_fields.get("issue_date")),
+        expiration_date=_safe_date(extracted_fields.get("expiration_date")),
+        extracted_text_raw=ocr_result["text"],
+        extracted_fields_json=sanitized_fields,
+        extraction_confidence=ocr_result.get("confidence"),
+        ocr_engine=ocr_result.get("engine"),
+        comparison_status=comparison_result["comparison_status"],
+        comparison_score=comparison_result["comparison_score"],
+        validation_status=validation_status,
+        status=DocumentProcessingStatus.PROCESSED,
+    )
+
+
+def _determine_validation_status(
+    document_type: DocumentType,
+    extracted_fields: dict[str, Any],
+    comparison_result: dict[str, Any],
+    parsing_result: dict[str, Any] | None,
+    capture_quality_score: float | None,
+) -> ValidationStatus:
+    """Compute the validation status based on extraction quality and comparison."""
+    if document_type == DocumentType.INE:
+        has_name = bool(extracted_fields.get("nombre_completo"))
+        has_curp = bool(extracted_fields.get("curp"))
+        if has_name and has_curp:
+            validation_status = ValidationStatus.VALID
+        elif has_name or has_curp:
+            validation_status = ValidationStatus.NEEDS_REVIEW
+        else:
+            validation_status = ValidationStatus.INVALID
+    else:
+        validation_status = ValidationStatus(parsing_result["validation_status"]) if parsing_result else ValidationStatus.PENDING
+
+    # Override based on comparison
+    comparison_status = comparison_result["comparison_status"]
+    if comparison_status == ComparisonStatus.MISMATCH.value:
+        validation_status = ValidationStatus.INVALID
+    elif comparison_status == ComparisonStatus.LOW_MATCH.value:
+        validation_status = ValidationStatus.NEEDS_REVIEW
+
+    return validation_status
+
+
+# ── Combined Upload + Process ──────────────────────────────────────────────────
+
+
 @router.post("/upload-and-process", response_model=DocumentProcessResponse)
 async def upload_and_process_document(
     user_id: int = Form(...),
@@ -42,15 +176,11 @@ async def upload_and_process_document(
     db: Session = Depends(get_db),
 ) -> DocumentProcessResponse:
     """Combined endpoint: upload + OCR + parse in a single request.
-    
-    This avoids the issue of ephemeral storage on Cloud Run where
-    the file might not be available for a subsequent /process call.
-    """
-    import traceback
-    import logging
-    logger = logging.getLogger(__name__)
 
-    # Validate user
+    This avoids the issue of ephemeral storage on Cloud Run where
+    the file might not be available for a subsequent ``/process`` call.
+    """
+    # ── Validate user ──────────────────────────────────────────────────────
     user = user_repository.get_by_id(db, user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado.")
@@ -61,15 +191,18 @@ async def upload_and_process_document(
         country_enum = CountryCode(country)
         document_type_enum = DT(document_type)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="País o tipo documental inválido.") from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="País o tipo documental inválido.",
+        ) from exc
 
     validate_country_document_type(country_enum, document_type_enum)
 
-    # Read and validate file
+    # ── Read & validate file ───────────────────────────────────────────────
     image_bytes = await validate_upload_file(file)
     quality = evaluate_image_quality(image_bytes)
 
-    # Store image
+    # ── Store image ────────────────────────────────────────────────────────
     storage_service = StorageService()
     source_image_gcs_path = storage_service.upload_document_image(
         image_bytes=image_bytes,
@@ -78,7 +211,7 @@ async def upload_and_process_document(
         document_type=document_type_enum,
     )
 
-    # Create document record
+    # ── Create document record ─────────────────────────────────────────────
     try:
         document = document_repository.create(
             db,
@@ -108,20 +241,23 @@ async def upload_and_process_document(
         db.refresh(document)
     except Exception as e:
         db.rollback()
-        logger.error(f"Error creating document record: {e}")
-        raise HTTPException(status_code=500, detail=f"Error al crear registro: {str(e)}")
+        logger.error("Error creating document record: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error al crear el registro del documento. Intenta de nuevo.",
+        )
 
-    # Now process OCR directly on the image_bytes (no need to re-read from storage)
+    # ── OCR + Parse ────────────────────────────────────────────────────────
     document_repository.update(db, document, status=DocumentProcessingStatus.PROCESSING)
     audit_service.log_document_action(db=db, document=document, action="document_processing_started", details=None)
     db.commit()
 
     ocr_service = OCRService()
+    parsing_result: dict[str, Any] | None = None
 
     try:
         ocr_result = ocr_service.extract_text(image_bytes)
 
-        # Use specialized INE parser for INE documents
         if document.document_type == DocumentType.INE:
             ine_fields = ine_parsing_service.parse(ocr_result["text"])
             extracted_fields: dict[str, Any] = ine_fields
@@ -135,7 +271,7 @@ async def upload_and_process_document(
                 apellido_materno=ine_fields.get("apellido_materno"),
                 nombre_completo=ine_fields.get("nombre_completo"),
                 nacionalidad=ine_fields.get("nacionalidad"),
-                fecha_nacimiento=ine_fields.get("fecha_nacimiento"),
+                fecha_nacimiento=_safe_date(ine_fields.get("fecha_nacimiento")),
                 curp=ine_fields.get("curp"),
                 domicilio=ine_fields.get("domicilio"),
                 ocr_texto_original=ocr_result["text"],
@@ -151,68 +287,47 @@ async def upload_and_process_document(
             )
             extracted_fields = parsing_result["fields"]
 
-        # Compare against user
+        # ── Compare against user ───────────────────────────────────────────
         comparison_result = comparison_service.compare_user_against_document(
             user=user,
             extracted_fields=extracted_fields,
         )
 
-        # Determine validation status
-        if document.document_type == DocumentType.INE:
-            has_name = bool(extracted_fields.get("nombre_completo"))
-            has_curp = bool(extracted_fields.get("curp"))
-            if has_name and has_curp:
-                validation_status = ValidationStatus.VALID
-            elif has_name or has_curp:
-                validation_status = ValidationStatus.NEEDS_REVIEW
-            else:
-                validation_status = ValidationStatus.INVALID
-        else:
-            validation_status = ValidationStatus(parsing_result["validation_status"])
-
-        comparison_status = comparison_result["comparison_status"]
-        if comparison_status == ComparisonStatus.MISMATCH.value:
-            validation_status = ValidationStatus.INVALID
-        elif comparison_status == ComparisonStatus.LOW_MATCH.value:
-            validation_status = ValidationStatus.NEEDS_REVIEW
-
-        document = document_repository.update(
-            db,
-            document,
-            full_name=extracted_fields.get("full_name"),
-            first_name=extracted_fields.get("first_name"),
-            last_name=extracted_fields.get("last_name"),
-            birth_date=extracted_fields.get("birth_date"),
-            sex=extracted_fields.get("sex"),
-            national_id=extracted_fields.get("national_id"),
-            document_number=extracted_fields.get("document_number"),
-            curp=extracted_fields.get("curp"),
-            nationality=extracted_fields.get("nationality"),
-            issue_date=extracted_fields.get("issue_date"),
-            expiration_date=extracted_fields.get("expiration_date"),
-            extracted_text_raw=ocr_result["text"],
-            extracted_fields_json=extracted_fields,
-            extraction_confidence=ocr_result.get("confidence"),
-            ocr_engine=ocr_result.get("engine"),
-            comparison_status=comparison_result["comparison_status"],
-            comparison_score=comparison_result["comparison_score"],
-            validation_status=validation_status,
-            status=DocumentProcessingStatus.PROCESSED,
+        # ── Determine validation status ────────────────────────────────────
+        validation_status = _determine_validation_status(
+            document_type=document.document_type,
+            extracted_fields=extracted_fields,
+            comparison_result=comparison_result,
+            parsing_result=parsing_result,
+            capture_quality_score=document.capture_quality_score,
         )
+
+        # ── Persist results (with sanitised JSON) ──────────────────────────
+        document = _update_document_with_extraction(
+            db=db,
+            document=document,
+            extracted_fields=extracted_fields,
+            ocr_result=ocr_result,
+            comparison_result=comparison_result,
+            validation_status=validation_status,
+        )
+
         audit_service.log_document_action(
             db=db,
             document=document,
             action="document_processed",
-            details={
+            details=_sanitize_for_json({
                 "comparison_status": comparison_result["comparison_status"],
                 "comparison_score": comparison_result["comparison_score"],
                 "validation_status": validation_status.value,
                 "ocr_engine": ocr_result.get("engine"),
                 "combined_endpoint": True,
-            },
+            }),
         )
         db.commit()
         db.refresh(document)
+
+        sanitized_fields = _sanitize_for_json(extracted_fields)
         return DocumentProcessResponse(
             id=document.id,
             uuid=document.uuid,
@@ -222,7 +337,7 @@ async def upload_and_process_document(
             comparison_score=document.comparison_score,
             extraction_confidence=document.extraction_confidence,
             capture_quality_score=document.capture_quality_score,
-            extracted_fields=document.extracted_fields_json or {},
+            extracted_fields=sanitized_fields,
         )
     except HTTPException:
         db.rollback()
@@ -231,19 +346,22 @@ async def upload_and_process_document(
         raise
     except Exception as e:
         db.rollback()
-        logger.error(f"Error processing document: {traceback.format_exc()}")
+        logger.error("Error processing document: %s", traceback.format_exc())
         document_repository.update(db, document, status=DocumentProcessingStatus.FAILED)
         audit_service.log_document_action(
             db=db,
             document=document,
             action="document_processing_failed",
-            details={"error": str(e), "combined_endpoint": True},
+            details={"error": str(e)[:200], "combined_endpoint": True},
         )
         db.commit()
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Error al procesar OCR: {str(e)}",
+            detail="Error al procesar el documento. Por favor, intenta de nuevo con una foto más clara.",
         )
+
+
+# ── Analyze Capture ────────────────────────────────────────────────────────────
 
 
 @router.post("/analyze-capture", response_model=DocumentCaptureAnalysisResponse)
@@ -270,6 +388,9 @@ async def analyze_capture(
         recommended_action=recommended_action,
         preprocessing_enabled=settings.enable_image_preprocessing,
     )
+
+
+# ── Upload (standalone) ───────────────────────────────────────────────────────
 
 
 @router.post("/upload", response_model=DocumentUploadResponse, status_code=status.HTTP_201_CREATED)
@@ -338,6 +459,9 @@ async def upload_document(
         raise
 
 
+# ── Process (standalone) ───────────────────────────────────────────────────────
+
+
 @router.post("/{document_id}/process", response_model=DocumentProcessResponse)
 def process_document(document_id: int, db: Session = Depends(get_db)) -> DocumentProcessResponse:
     document = document_repository.get_by_id(db, document_id)
@@ -356,17 +480,16 @@ def process_document(document_id: int, db: Session = Depends(get_db)) -> Documen
 
     storage_service = StorageService()
     ocr_service = OCRService()
+    parsing_result: dict[str, Any] | None = None
 
     try:
         image_bytes = storage_service.download_document_image(document.source_image_gcs_path)
         ocr_result = ocr_service.extract_text(image_bytes)
 
-        # Use specialized INE parser for INE documents
         if document.document_type == DocumentType.INE:
             ine_fields = ine_parsing_service.parse(ocr_result["text"])
             extracted_fields: dict[str, Any] = ine_fields
 
-            # Also save to documentos_ine_mexico table
             ine_repository.create(
                 db,
                 usuario_id=document.user_id,
@@ -375,7 +498,7 @@ def process_document(document_id: int, db: Session = Depends(get_db)) -> Documen
                 apellido_materno=ine_fields.get("apellido_materno"),
                 nombre_completo=ine_fields.get("nombre_completo"),
                 nacionalidad=ine_fields.get("nacionalidad"),
-                fecha_nacimiento=ine_fields.get("fecha_nacimiento"),
+                fecha_nacimiento=_safe_date(ine_fields.get("fecha_nacimiento")),
                 curp=ine_fields.get("curp"),
                 domicilio=ine_fields.get("domicilio"),
                 ocr_texto_original=ocr_result["text"],
@@ -384,76 +507,50 @@ def process_document(document_id: int, db: Session = Depends(get_db)) -> Documen
                 fecha_captura=datetime.utcnow(),
                 creado_por=f"user_{document.user_id}",
             )
-
-            # Determine validation status for INE
-            has_name = bool(ine_fields.get("nombre_completo"))
-            has_curp = bool(ine_fields.get("curp"))
-            if has_name and has_curp:
-                validation_status = ValidationStatus.VALID
-            elif has_name or has_curp:
-                validation_status = ValidationStatus.NEEDS_REVIEW
-            else:
-                validation_status = ValidationStatus.INVALID
         else:
-            # Use generic parser for other document types
             parsing_result = parsing_service.parse_document(
                 document_type=document.document_type,
                 raw_text=ocr_result["text"],
             )
             extracted_fields = parsing_result["fields"]
-            validation_status = ValidationStatus(parsing_result["validation_status"])
 
-        # Compare against user
         comparison_result = comparison_service.compare_user_against_document(
             user=user,
             extracted_fields=extracted_fields,
         )
 
-        comparison_status = comparison_result["comparison_status"]
-        if comparison_status == ComparisonStatus.MISMATCH.value:
-            validation_status = ValidationStatus.INVALID
-        elif comparison_status == ComparisonStatus.LOW_MATCH.value or document.capture_quality_score is None:
-            validation_status = ValidationStatus.NEEDS_REVIEW
-        elif document.capture_quality_score < settings.min_capture_quality_score:
-            validation_status = ValidationStatus.NEEDS_REVIEW
-
-        document = document_repository.update(
-            db,
-            document,
-            full_name=extracted_fields.get("full_name"),
-            first_name=extracted_fields.get("first_name"),
-            last_name=extracted_fields.get("last_name"),
-            birth_date=extracted_fields.get("birth_date"),
-            sex=extracted_fields.get("sex"),
-            national_id=extracted_fields.get("national_id"),
-            document_number=extracted_fields.get("document_number"),
-            curp=extracted_fields.get("curp"),
-            nationality=extracted_fields.get("nationality"),
-            issue_date=extracted_fields.get("issue_date"),
-            expiration_date=extracted_fields.get("expiration_date"),
-            extracted_text_raw=ocr_result["text"],
-            extracted_fields_json=extracted_fields,
-            extraction_confidence=ocr_result.get("confidence"),
-            ocr_engine=ocr_result.get("engine"),
-            comparison_status=comparison_result["comparison_status"],
-            comparison_score=comparison_result["comparison_score"],
-            validation_status=validation_status,
-            status=DocumentProcessingStatus.PROCESSED,
+        validation_status = _determine_validation_status(
+            document_type=document.document_type,
+            extracted_fields=extracted_fields,
+            comparison_result=comparison_result,
+            parsing_result=parsing_result,
+            capture_quality_score=document.capture_quality_score,
         )
+
+        document = _update_document_with_extraction(
+            db=db,
+            document=document,
+            extracted_fields=extracted_fields,
+            ocr_result=ocr_result,
+            comparison_result=comparison_result,
+            validation_status=validation_status,
+        )
+
         audit_service.log_document_action(
             db=db,
             document=document,
             action="document_processed",
-            details={
+            details=_sanitize_for_json({
                 "comparison_status": comparison_result["comparison_status"],
                 "comparison_score": comparison_result["comparison_score"],
                 "validation_status": validation_status.value,
                 "ocr_engine": ocr_result.get("engine"),
-                "preprocessing_variant": ocr_result.get("preprocessing_variant"),
-            },
+            }),
         )
         db.commit()
         db.refresh(document)
+
+        sanitized_fields = _sanitize_for_json(extracted_fields)
         return DocumentProcessResponse(
             id=document.id,
             uuid=document.uuid,
@@ -463,19 +560,31 @@ def process_document(document_id: int, db: Session = Depends(get_db)) -> Documen
             comparison_score=document.comparison_score,
             extraction_confidence=document.extraction_confidence,
             capture_quality_score=document.capture_quality_score,
-            extracted_fields=document.extracted_fields_json or {},
+            extracted_fields=sanitized_fields,
         )
-    except Exception:
+    except HTTPException:
         db.rollback()
-        document = document_repository.update(db, document, status=DocumentProcessingStatus.FAILED)
+        document_repository.update(db, document, status=DocumentProcessingStatus.FAILED)
+        db.commit()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error("Error processing document %d: %s", document_id, traceback.format_exc())
+        document_repository.update(db, document, status=DocumentProcessingStatus.FAILED)
         audit_service.log_document_action(
             db=db,
             document=document,
             action="document_processing_failed",
-            details={"document_id": document_id},
+            details={"error": str(e)[:200], "document_id": document_id},
         )
         db.commit()
-        raise
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Error al procesar el documento. Por favor, intenta de nuevo con una foto más clara.",
+        )
+
+
+# ── Results ────────────────────────────────────────────────────────────────────
 
 
 @router.get("/{document_id}/results", response_model=DocumentResultsResponse)
@@ -505,6 +614,9 @@ def get_document_results(document_id: int, db: Session = Depends(get_db)) -> Doc
         created_at=document.created_at,
         updated_at=document.updated_at,
     )
+
+
+# ── Confirm ────────────────────────────────────────────────────────────────────
 
 
 @router.post("/{document_id}/confirm", response_model=DocumentConfirmResponse)
@@ -547,6 +659,9 @@ def confirm_document(document_id: int, db: Session = Depends(get_db)) -> Documen
         comparison_score=document.comparison_score,
         confirmed=True,
     )
+
+
+# ── Retry ──────────────────────────────────────────────────────────────────────
 
 
 @router.post("/{document_id}/retry", response_model=DocumentRetryResponse)
