@@ -48,14 +48,14 @@ class Settings(BaseSettings):
     google_credentials_base64: str = ""  # Base64-encoded service account JSON for Google Vision
 
     max_upload_size_bytes: int = 8 * 1024 * 1024
-    min_image_width: int = 900
-    min_image_height: int = 600
+    min_image_width: int = 600
+    min_image_height: int = 400
     min_capture_quality_score: float = 0.45
     max_retry_count: int = 3
     allowed_mime_types: str = "image/jpeg,image/png,image/jpg"
 
     api_key: str = ""  # Required for production. Set via API_KEY env var.
-    cors_origins: str = "*"  # Comma-separated allowed origins. Use "*" for dev, restrict in production.
+    cors_origins: str = "*,https://facer-registro-doc.web.app,http://localhost:5174"  # Comma-separated allowed origins.
 
     @computed_field  # type: ignore[misc]
     @property

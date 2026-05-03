@@ -1,32 +1,39 @@
 // API client for facer-registro-documental
+// Configuration is hardcoded - no user input needed
 
-const DEFAULT_BASE_URL = "http://localhost:8080";
-
-export interface ApiConfig {
-  baseUrl: string;
-  apiKey: string;
-}
-
-let config: ApiConfig = {
-  baseUrl: DEFAULT_BASE_URL,
-  apiKey: "",
-};
-
-export function setApiConfig(c: Partial<ApiConfig>) {
-  config = { ...config, ...c };
-}
-
-export function getApiConfig(): ApiConfig {
-  return { ...config };
-}
+const API_BASE_URL = "https://registro-documental-344497085765.us-central1.run.app";
+const API_KEY = "FaceR2026Key";
 
 function headers(): HeadersInit {
-  const h: HeadersInit = {};
-  if (config.apiKey) {
-    h["Authorization"] = `Bearer ${config.apiKey}`;
-  }
-  return h;
+  return {
+    Authorization: `Bearer ${API_KEY}`,
+  };
 }
+
+// ── Auth ──────────────────────────────────────────────────
+
+export interface LoginResponse {
+  success: boolean;
+  user_id: number;
+  full_name: string;
+  role: string;
+  message: string;
+}
+
+export async function login(username: string, password: string): Promise<LoginResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({ detail: "Error de conexión" }));
+    throw new Error(data.detail || `Error ${res.status}`);
+  }
+  return res.json();
+}
+
+// ── Documents ─────────────────────────────────────────────
 
 export interface CaptureAnalysis {
   file_size_bytes: number;
@@ -43,18 +50,6 @@ export interface CaptureAnalysis {
   preprocessing_enabled: boolean;
 }
 
-export interface UploadResponse {
-  id: number;
-  uuid: string;
-  user_id: number;
-  country: string;
-  document_type: string;
-  status: string;
-  validation_status: string;
-  capture_quality_score: number | null;
-  created_at: string;
-}
-
 export interface ProcessResponse {
   id: number;
   uuid: string;
@@ -67,28 +62,10 @@ export interface ProcessResponse {
   extracted_fields: Record<string, string | null>;
 }
 
-export interface ResultsResponse {
-  id: number;
-  uuid: string;
-  user_id: number;
-  country: string;
-  document_type: string;
-  status: string;
-  validation_status: string;
-  comparison_status: string | null;
-  comparison_score: number | null;
-  extraction_confidence: number | null;
-  capture_quality_score: number | null;
-  ocr_engine: string | null;
-  extracted_fields: Record<string, string | null> | null;
-  created_at: string;
-  updated_at: string;
-}
-
 export async function analyzeCapture(file: Blob): Promise<CaptureAnalysis> {
   const form = new FormData();
   form.append("file", file, "capture.jpg");
-  const res = await fetch(`${config.baseUrl}/api/v1/documents/analyze-capture`, {
+  const res = await fetch(`${API_BASE_URL}/api/v1/documents/analyze-capture`, {
     method: "POST",
     headers: headers(),
     body: form,
@@ -97,47 +74,43 @@ export async function analyzeCapture(file: Blob): Promise<CaptureAnalysis> {
   return res.json();
 }
 
-export async function uploadDocument(
+/**
+ * Combined upload + OCR + parse in a single request.
+ * This is the main endpoint - avoids ephemeral storage issues on Cloud Run.
+ */
+export async function uploadAndProcess(
   userId: number,
   country: string,
   documentType: string,
   file: Blob,
-): Promise<UploadResponse> {
+): Promise<ProcessResponse> {
   const form = new FormData();
   form.append("user_id", String(userId));
   form.append("country", String(country));
   form.append("document_type", String(documentType));
   form.append("file", file, "document.jpg");
-  const res = await fetch(`${config.baseUrl}/api/v1/documents/upload`, {
+  const res = await fetch(`${API_BASE_URL}/api/v1/documents/upload-and-process`, {
     method: "POST",
     headers: headers(),
     body: form,
   });
-  if (!res.ok) throw new Error(`Upload failed: ${res.status} ${await res.text()}`);
-  return res.json();
-}
-
-export async function processDocument(documentId: number): Promise<ProcessResponse> {
-  const res = await fetch(`${config.baseUrl}/api/v1/documents/${documentId}/process`, {
-    method: "POST",
-    headers: headers(),
-  });
-  if (!res.ok) throw new Error(`Process failed: ${res.status} ${await res.text()}`);
-  return res.json();
-}
-
-export async function getResults(documentId: number): Promise<ResultsResponse> {
-  const res = await fetch(`${config.baseUrl}/api/v1/documents/${documentId}/results`, {
-    method: "GET",
-    headers: headers(),
-  });
-  if (!res.ok) throw new Error(`Results failed: ${res.status} ${await res.text()}`);
+  if (!res.ok) {
+    const errorText = await res.text();
+    let detail = `Error ${res.status}`;
+    try {
+      const errorJson = JSON.parse(errorText);
+      detail = errorJson.detail || detail;
+    } catch {
+      detail = errorText || detail;
+    }
+    throw new Error(detail);
+  }
   return res.json();
 }
 
 export async function healthCheck(): Promise<boolean> {
   try {
-    const res = await fetch(`${config.baseUrl}/health`);
+    const res = await fetch(`${API_BASE_URL}/health`);
     return res.ok;
   } catch {
     return false;

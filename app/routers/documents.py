@@ -33,6 +33,219 @@ parsing_service = ParsingService()
 ine_parsing_service = INEParsingService()
 
 
+@router.post("/upload-and-process", response_model=DocumentProcessResponse)
+async def upload_and_process_document(
+    user_id: int = Form(...),
+    country: str = Form(...),
+    document_type: str = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> DocumentProcessResponse:
+    """Combined endpoint: upload + OCR + parse in a single request.
+    
+    This avoids the issue of ephemeral storage on Cloud Run where
+    the file might not be available for a subsequent /process call.
+    """
+    import traceback
+    import logging
+    logger = logging.getLogger(__name__)
+
+    # Validate user
+    user = user_repository.get_by_id(db, user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado.")
+
+    from app.models import CountryCode, DocumentType as DT
+
+    try:
+        country_enum = CountryCode(country)
+        document_type_enum = DT(document_type)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="País o tipo documental inválido.") from exc
+
+    validate_country_document_type(country_enum, document_type_enum)
+
+    # Read and validate file
+    image_bytes = await validate_upload_file(file)
+    quality = evaluate_image_quality(image_bytes)
+
+    # Store image
+    storage_service = StorageService()
+    source_image_gcs_path = storage_service.upload_document_image(
+        image_bytes=image_bytes,
+        content_type=file.content_type or "image/jpeg",
+        country=country_enum,
+        document_type=document_type_enum,
+    )
+
+    # Create document record
+    try:
+        document = document_repository.create(
+            db,
+            user_id=user_id,
+            country=country_enum,
+            document_type=document_type_enum,
+            source_image_gcs_path=source_image_gcs_path,
+            capture_quality_score=quality["quality_score"],
+            validation_status=(
+                ValidationStatus.NEEDS_REVIEW if quality["recapture_recommended"] else ValidationStatus.PENDING
+            ),
+            status=DocumentProcessingStatus.UPLOADED,
+        )
+        audit_service.log_document_action(
+            db=db,
+            document=document,
+            action="document_uploaded",
+            details={
+                "user_id": user_id,
+                "country": country_enum.value,
+                "document_type": document_type_enum.value,
+                "capture_quality_score": quality["quality_score"],
+                "combined_endpoint": True,
+            },
+        )
+        db.commit()
+        db.refresh(document)
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error creating document record: {e}")
+        raise HTTPException(status_code=500, detail=f"Error al crear registro: {str(e)}")
+
+    # Now process OCR directly on the image_bytes (no need to re-read from storage)
+    document_repository.update(db, document, status=DocumentProcessingStatus.PROCESSING)
+    audit_service.log_document_action(db=db, document=document, action="document_processing_started", details=None)
+    db.commit()
+
+    ocr_service = OCRService()
+
+    try:
+        ocr_result = ocr_service.extract_text(image_bytes)
+
+        # Use specialized INE parser for INE documents
+        if document.document_type == DocumentType.INE:
+            ine_fields = ine_parsing_service.parse(ocr_result["text"])
+            extracted_fields: dict[str, Any] = ine_fields
+
+            # Save to documentos_ine_mexico table
+            ine_repository.create(
+                db,
+                usuario_id=document.user_id,
+                nombre=ine_fields.get("nombre"),
+                apellido_paterno=ine_fields.get("apellido_paterno"),
+                apellido_materno=ine_fields.get("apellido_materno"),
+                nombre_completo=ine_fields.get("nombre_completo"),
+                nacionalidad=ine_fields.get("nacionalidad"),
+                fecha_nacimiento=ine_fields.get("fecha_nacimiento"),
+                curp=ine_fields.get("curp"),
+                domicilio=ine_fields.get("domicilio"),
+                ocr_texto_original=ocr_result["text"],
+                ocr_confianza=ocr_result.get("confidence"),
+                imagen_frontal_url=document.source_image_gcs_path,
+                fecha_captura=datetime.utcnow(),
+                creado_por=f"user_{document.user_id}",
+            )
+        else:
+            parsing_result = parsing_service.parse_document(
+                document_type=document.document_type,
+                raw_text=ocr_result["text"],
+            )
+            extracted_fields = parsing_result["fields"]
+
+        # Compare against user
+        comparison_result = comparison_service.compare_user_against_document(
+            user=user,
+            extracted_fields=extracted_fields,
+        )
+
+        # Determine validation status
+        if document.document_type == DocumentType.INE:
+            has_name = bool(extracted_fields.get("nombre_completo"))
+            has_curp = bool(extracted_fields.get("curp"))
+            if has_name and has_curp:
+                validation_status = ValidationStatus.VALID
+            elif has_name or has_curp:
+                validation_status = ValidationStatus.NEEDS_REVIEW
+            else:
+                validation_status = ValidationStatus.INVALID
+        else:
+            validation_status = ValidationStatus(parsing_result["validation_status"])
+
+        comparison_status = comparison_result["comparison_status"]
+        if comparison_status == ComparisonStatus.MISMATCH.value:
+            validation_status = ValidationStatus.INVALID
+        elif comparison_status == ComparisonStatus.LOW_MATCH.value:
+            validation_status = ValidationStatus.NEEDS_REVIEW
+
+        document = document_repository.update(
+            db,
+            document,
+            full_name=extracted_fields.get("full_name"),
+            first_name=extracted_fields.get("first_name"),
+            last_name=extracted_fields.get("last_name"),
+            birth_date=extracted_fields.get("birth_date"),
+            sex=extracted_fields.get("sex"),
+            national_id=extracted_fields.get("national_id"),
+            document_number=extracted_fields.get("document_number"),
+            curp=extracted_fields.get("curp"),
+            nationality=extracted_fields.get("nationality"),
+            issue_date=extracted_fields.get("issue_date"),
+            expiration_date=extracted_fields.get("expiration_date"),
+            extracted_text_raw=ocr_result["text"],
+            extracted_fields_json=extracted_fields,
+            extraction_confidence=ocr_result.get("confidence"),
+            ocr_engine=ocr_result.get("engine"),
+            comparison_status=comparison_result["comparison_status"],
+            comparison_score=comparison_result["comparison_score"],
+            validation_status=validation_status,
+            status=DocumentProcessingStatus.PROCESSED,
+        )
+        audit_service.log_document_action(
+            db=db,
+            document=document,
+            action="document_processed",
+            details={
+                "comparison_status": comparison_result["comparison_status"],
+                "comparison_score": comparison_result["comparison_score"],
+                "validation_status": validation_status.value,
+                "ocr_engine": ocr_result.get("engine"),
+                "combined_endpoint": True,
+            },
+        )
+        db.commit()
+        db.refresh(document)
+        return DocumentProcessResponse(
+            id=document.id,
+            uuid=document.uuid,
+            status=document.status,
+            validation_status=document.validation_status,
+            comparison_status=document.comparison_status,
+            comparison_score=document.comparison_score,
+            extraction_confidence=document.extraction_confidence,
+            capture_quality_score=document.capture_quality_score,
+            extracted_fields=document.extracted_fields_json or {},
+        )
+    except HTTPException:
+        db.rollback()
+        document_repository.update(db, document, status=DocumentProcessingStatus.FAILED)
+        db.commit()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error processing document: {traceback.format_exc()}")
+        document_repository.update(db, document, status=DocumentProcessingStatus.FAILED)
+        audit_service.log_document_action(
+            db=db,
+            document=document,
+            action="document_processing_failed",
+            details={"error": str(e), "combined_endpoint": True},
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Error al procesar OCR: {str(e)}",
+        )
+
+
 @router.post("/analyze-capture", response_model=DocumentCaptureAnalysisResponse)
 async def analyze_capture(
     file: UploadFile = File(...),

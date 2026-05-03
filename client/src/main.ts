@@ -1,23 +1,22 @@
 import "./style.css";
 import {
-  setApiConfig,
-  getApiConfig,
-  healthCheck,
+  login,
   analyzeCapture,
-  uploadDocument,
-  processDocument,
+  uploadAndProcess,
   type ProcessResponse,
   type CaptureAnalysis,
+  type LoginResponse,
 } from "./api";
 import { startCamera, type CameraInstance } from "./camera";
 import { compressImage, formatBytes, type CompressResult } from "./compress";
 
 // ── State ──────────────────────────────────────────────
 interface AppState {
-  screen: "config" | "select" | "capture" | "review" | "processing" | "results";
+  screen: "login" | "select" | "capture" | "review" | "processing" | "results";
   country: string;
   documentType: string;
   userId: number;
+  userName: string;
   camera: CameraInstance | null;
   capturedBlob: Blob | null;
   capturedUrl: string;
@@ -29,10 +28,11 @@ interface AppState {
 }
 
 const state: AppState = {
-  screen: "config",
+  screen: "login",
   country: "MX",
   documentType: "INE",
   userId: 1,
+  userName: "",
   camera: null,
   capturedBlob: null,
   capturedUrl: "",
@@ -48,8 +48,8 @@ const app = document.getElementById("app")!;
 // ── Render Router ──────────────────────────────────────
 function render() {
   switch (state.screen) {
-    case "config":
-      renderConfig();
+    case "login":
+      renderLogin();
       break;
     case "select":
       renderSelect();
@@ -87,63 +87,77 @@ function headerHTML(title: string, subtitle?: string): string {
   `;
 }
 
-// ── Screen: Config ─────────────────────────────────────
-function renderConfig() {
-  const cfg = getApiConfig();
+// ── Screen: Login ─────────────────────────────────────
+function renderLogin() {
   app.innerHTML = `
     <div class="min-h-screen flex items-center justify-center p-4">
-      <div class="w-full max-w-md fade-in">
-        ${headerHTML("Configuración", "Conecta con el servicio de registro documental")}
-        <div class="bg-facer-surface rounded-2xl p-6 border border-facer-border shadow-xl">
-          <div class="space-y-4">
-            <div>
-              <label class="block text-sm font-medium text-facer-text-muted mb-1.5">URL del servidor</label>
-              <input id="cfg-url" type="url" value="${cfg.baseUrl}"
-                class="w-full px-4 py-2.5 rounded-lg bg-facer-card border border-facer-border text-facer-text placeholder-facer-text-muted/50 focus:outline-none focus:border-facer-accent transition-colors text-sm" 
-                placeholder="http://localhost:8080" />
+      <div class="w-full max-w-sm fade-in">
+        <div class="text-center mb-8">
+          <div class="flex items-center justify-center gap-3 mb-4">
+            <div class="w-14 h-14 rounded-2xl bg-facer-accent/20 flex items-center justify-center">
+              <svg class="w-8 h-8 text-facer-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+              </svg>
             </div>
-            <div>
-              <label class="block text-sm font-medium text-facer-text-muted mb-1.5">API Key <span class="text-facer-text-muted/50">(opcional en dev)</span></label>
-              <input id="cfg-key" type="password" value="${cfg.apiKey}"
-                class="w-full px-4 py-2.5 rounded-lg bg-facer-card border border-facer-border text-facer-text placeholder-facer-text-muted/50 focus:outline-none focus:border-facer-accent transition-colors text-sm"
-                placeholder="Tu API key" />
-            </div>
-            <div>
-              <label class="block text-sm font-medium text-facer-text-muted mb-1.5">ID de usuario</label>
-              <input id="cfg-user" type="number" value="${state.userId}" min="1"
-                class="w-full px-4 py-2.5 rounded-lg bg-facer-card border border-facer-border text-facer-text placeholder-facer-text-muted/50 focus:outline-none focus:border-facer-accent transition-colors text-sm"
-                placeholder="1" />
-            </div>
-            <div id="cfg-status" class="text-sm text-center py-2"></div>
-            <button id="cfg-connect" class="btn-primary w-full py-3 rounded-xl text-white font-medium text-sm cursor-pointer border-0">
-              Conectar
-            </button>
           </div>
+          <h1 class="text-2xl font-bold tracking-tight text-facer-text">FaceR</h1>
+          <p class="text-sm text-facer-text-muted mt-1">Registro Documental</p>
         </div>
-        <p class="text-center text-xs text-facer-text-muted/50 mt-6">FaceR Registro Documental v1.0</p>
+        <div class="bg-facer-surface rounded-2xl p-6 border border-facer-border shadow-xl">
+          <form id="login-form" class="space-y-4">
+            <div>
+              <label class="block text-sm font-medium text-facer-text-muted mb-1.5">Usuario</label>
+              <input id="login-user" type="text" autocomplete="username" required
+                class="w-full px-4 py-3 rounded-xl bg-facer-card border border-facer-border text-facer-text placeholder-facer-text-muted/50 focus:outline-none focus:border-facer-accent focus:ring-1 focus:ring-facer-accent/30 transition-all text-sm" 
+                placeholder="Ingresa tu usuario" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-facer-text-muted mb-1.5">Contraseña</label>
+              <input id="login-pass" type="password" autocomplete="current-password" required
+                class="w-full px-4 py-3 rounded-xl bg-facer-card border border-facer-border text-facer-text placeholder-facer-text-muted/50 focus:outline-none focus:border-facer-accent focus:ring-1 focus:ring-facer-accent/30 transition-all text-sm"
+                placeholder="Ingresa tu contraseña" />
+            </div>
+            <div id="login-error" class="hidden text-sm text-facer-error text-center py-1"></div>
+            <button type="submit" id="login-btn" class="btn-primary w-full py-3 rounded-xl text-white font-medium text-sm cursor-pointer border-0 mt-2">
+              Iniciar sesión
+            </button>
+          </form>
+        </div>
+        <p class="text-center text-xs text-facer-text-muted/50 mt-6">FaceR Registro Documental v2.0</p>
       </div>
     </div>
   `;
 
-  document.getElementById("cfg-connect")!.addEventListener("click", async () => {
-    const url = (document.getElementById("cfg-url") as HTMLInputElement).value.replace(/\/+$/, "");
-    const key = (document.getElementById("cfg-key") as HTMLInputElement).value.trim();
-    const userId = parseInt((document.getElementById("cfg-user") as HTMLInputElement).value, 10);
-    const statusEl = document.getElementById("cfg-status")!;
+  const form = document.getElementById("login-form") as HTMLFormElement;
+  const errorEl = document.getElementById("login-error")!;
+  const btn = document.getElementById("login-btn") as HTMLButtonElement;
 
-    setApiConfig({ baseUrl: url, apiKey: key });
-    state.userId = userId || 1;
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const username = (document.getElementById("login-user") as HTMLInputElement).value.trim();
+    const password = (document.getElementById("login-pass") as HTMLInputElement).value;
 
-    statusEl.innerHTML = `<span class="text-facer-accent">Verificando conexión...</span>`;
-    const ok = await healthCheck();
-    if (ok) {
-      statusEl.innerHTML = `<span class="text-facer-success">Conectado correctamente</span>`;
-      setTimeout(() => {
-        state.screen = "select";
-        render();
-      }, 600);
-    } else {
-      statusEl.innerHTML = `<span class="text-facer-error">No se pudo conectar al servidor</span>`;
+    if (!username || !password) {
+      errorEl.textContent = "Ingresa usuario y contraseña";
+      errorEl.classList.remove("hidden");
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = "Verificando...";
+    errorEl.classList.add("hidden");
+
+    try {
+      const response: LoginResponse = await login(username, password);
+      state.userId = response.user_id;
+      state.userName = response.full_name;
+      state.screen = "select";
+      render();
+    } catch (err: any) {
+      errorEl.textContent = err.message || "Error de autenticación";
+      errorEl.classList.remove("hidden");
+      btn.disabled = false;
+      btn.textContent = "Iniciar sesión";
     }
   });
 }
@@ -160,7 +174,7 @@ function renderSelect() {
   app.innerHTML = `
     <div class="min-h-screen flex items-center justify-center p-4">
       <div class="w-full max-w-md fade-in">
-        ${headerHTML("Registro Documental", "Selecciona el tipo de documento a capturar")}
+        ${headerHTML("Registro Documental", `Hola, ${state.userName}. Selecciona el tipo de documento.`)}
         <div class="space-y-3">
           ${docTypes
             .map(
@@ -179,8 +193,8 @@ function renderSelect() {
             )
             .join("")}
         </div>
-        <button id="back-config" class="btn-secondary w-full py-2.5 rounded-xl text-facer-text-muted font-medium text-sm cursor-pointer mt-4">
-          Cambiar configuración
+        <button id="btn-logout" class="btn-secondary w-full py-2.5 rounded-xl text-facer-text-muted font-medium text-sm cursor-pointer mt-4">
+          Cerrar sesión
         </button>
       </div>
     </div>
@@ -197,8 +211,10 @@ function renderSelect() {
     });
   });
 
-  document.getElementById("back-config")!.addEventListener("click", () => {
-    state.screen = "config";
+  document.getElementById("btn-logout")!.addEventListener("click", () => {
+    state.userId = 0;
+    state.userName = "";
+    state.screen = "login";
     render();
   });
 }
@@ -296,7 +312,7 @@ function renderReview() {
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
               </svg>
-              Analizando calidad de imagen...
+              Preparando imagen...
             </div>
           </div>
         </div>
@@ -350,22 +366,7 @@ function renderReview() {
               <div class="w-full h-2 bg-facer-card rounded-full overflow-hidden">
                 <div class="h-full rounded-full transition-all duration-500 ${analysis.meets_minimum ? "bg-facer-success" : "bg-facer-warning"}" style="width: ${scorePercent}%"></div>
               </div>
-              <div class="grid grid-cols-3 gap-2 text-xs text-facer-text-muted">
-                <div class="bg-facer-card rounded-lg p-2 text-center">
-                  <div class="font-medium text-facer-text">${analysis.width}x${analysis.height}</div>
-                  <div>Resolución</div>
-                </div>
-                <div class="bg-facer-card rounded-lg p-2 text-center">
-                  <div class="font-medium text-facer-text">${analysis.sharpness.toFixed(1)}</div>
-                  <div>Nitidez</div>
-                </div>
-                <div class="bg-facer-card rounded-lg p-2 text-center">
-                  <div class="font-medium text-facer-text">${analysis.brightness.toFixed(1)}</div>
-                  <div>Brillo</div>
-                </div>
-              </div>
-              <!-- Compression info -->
-              <div class="flex items-center justify-between bg-facer-card rounded-lg p-2 mt-2">
+              <div class="flex items-center justify-between bg-facer-card rounded-lg p-2">
                 <span class="text-xs text-facer-text-muted">Compresión</span>
                 <span class="text-xs font-medium text-facer-accent">
                   ${formatBytes(compressionResult.originalSize)} → ${formatBytes(compressionResult.compressedSize)}
@@ -376,14 +377,17 @@ function renderReview() {
             </div>
           `;
         } else {
-          // Analysis failed but compression succeeded
+          // Analysis failed but compression succeeded - still allow sending
           qualityEl.innerHTML = `
             <div class="space-y-2">
-              <p class="text-sm text-facer-warning">No se pudo analizar la calidad. Puedes enviar de todos modos.</p>
+              <div class="flex items-center gap-2 text-sm text-facer-success">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+                Imagen lista para enviar
+              </div>
               <div class="flex items-center justify-between bg-facer-card rounded-lg p-2">
-                <span class="text-xs text-facer-text-muted">Compresión</span>
+                <span class="text-xs text-facer-text-muted">Tamaño</span>
                 <span class="text-xs font-medium text-facer-accent">
-                  ${formatBytes(compressionResult.originalSize)} → ${formatBytes(compressionResult.compressedSize)}
+                  ${formatBytes(compressionResult.compressedSize)}
                 </span>
               </div>
             </div>
@@ -391,8 +395,8 @@ function renderReview() {
         }
         sendBtn.disabled = false;
       })
-      .catch((err) => {
-        qualityEl.innerHTML = `<p class="text-sm text-facer-error">Error al preparar imagen: ${err.message}</p>`;
+      .catch(() => {
+        qualityEl.innerHTML = `<p class="text-sm text-facer-warning">No se pudo preparar la imagen. Puedes enviar de todos modos.</p>`;
         // Still allow sending with original blob
         state.compressedBlob = state.capturedBlob;
         sendBtn.disabled = false;
@@ -436,7 +440,7 @@ function renderProcessing() {
               <div class="w-6 h-6 rounded-full bg-facer-accent/20 flex items-center justify-center shrink-0">
                 <svg class="w-3.5 h-3.5 text-facer-accent animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
               </div>
-              <span class="text-facer-text-muted">Subiendo imagen${state.compressionInfo ? ` (${formatBytes(state.compressionInfo.compressedSize)})` : ""}...</span>
+              <span class="text-facer-text-muted">Enviando imagen${state.compressionInfo ? ` (${formatBytes(state.compressionInfo.compressedSize)})` : ""}...</span>
             </div>
             <div id="step-ocr" class="flex items-center gap-3 text-sm opacity-40">
               <div class="w-6 h-6 rounded-full bg-facer-card flex items-center justify-center shrink-0">
@@ -470,17 +474,18 @@ async function runProcessing() {
   const spinIcon = `<div class="w-6 h-6 rounded-full bg-facer-accent/20 flex items-center justify-center shrink-0"><svg class="w-3.5 h-3.5 text-facer-accent animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg></div>`;
 
   try {
-    // Step 1: Upload (use compressed blob if available, otherwise original)
+    // Use combined upload-and-process endpoint
     const blobToUpload = state.compressedBlob || state.capturedBlob!;
-    const uploadRes = await uploadDocument(state.userId, state.country, state.documentType, blobToUpload);
-    stepUpload.innerHTML = `${checkIcon}<span class="text-facer-success">Imagen subida</span>`;
 
-    // Step 2: Process (OCR + parsing)
+    // Simulate step progression for UX
+    stepUpload.innerHTML = `${spinIcon}<span class="text-facer-text-muted">Enviando y procesando...</span>`;
     stepOcr.classList.remove("opacity-40");
     stepOcr.innerHTML = `${spinIcon}<span class="text-facer-text-muted">Extrayendo texto (OCR)...</span>`;
 
-    const processRes = await processDocument(uploadRes.id);
+    const processRes = await uploadAndProcess(state.userId, state.country, state.documentType, blobToUpload);
 
+    // All steps complete
+    stepUpload.innerHTML = `${checkIcon}<span class="text-facer-success">Imagen enviada</span>`;
     stepOcr.innerHTML = `${checkIcon}<span class="text-facer-success">Texto extraído</span>`;
     stepParse.classList.remove("opacity-40");
     stepParse.innerHTML = `${checkIcon}<span class="text-facer-success">Campos analizados</span>`;
@@ -493,7 +498,7 @@ async function runProcessing() {
   } catch (err: any) {
     errorEl.classList.remove("hidden");
     errorEl.innerHTML = `
-      <p class="mb-3">Error: ${err.message}</p>
+      <p class="mb-3">${err.message || "Error desconocido"}</p>
       <div class="flex gap-2 justify-center">
         <button id="proc-retry" class="btn-secondary px-4 py-2 rounded-lg text-sm cursor-pointer">Reintentar</button>
         <button id="proc-back" class="btn-secondary px-4 py-2 rounded-lg text-sm cursor-pointer">Volver</button>
@@ -564,18 +569,10 @@ function renderResults() {
     invalid: "Inválido",
   };
 
-  const comparisonLabels: Record<string, string> = {
-    exact_match: "Coincidencia exacta",
-    high_match: "Alta coincidencia",
-    medium_match: "Coincidencia media",
-    low_match: "Baja coincidencia",
-    mismatch: "No coincide",
-  };
-
   const validationClass = statusColors[r.validation_status] || statusColors.pending;
   const validationLabel = statusLabels[r.validation_status] || r.validation_status;
 
-  // Only show fields that have a label defined (hide internal/duplicate fields)
+  // Only show fields that have a label defined and have a value
   const fieldRows = Object.entries(fieldLabels)
     .filter(([k]) => fields[k] !== null && fields[k] !== undefined && fields[k] !== "")
     .map(
@@ -593,26 +590,10 @@ function renderResults() {
       <div class="w-full max-w-md fade-in">
         ${headerHTML("Resultados", "Datos extraídos del documento")}
         
-        <!-- Status badges -->
+        <!-- Status badge -->
         <div class="flex gap-2 justify-center mb-4">
           <span class="px-3 py-1 rounded-full text-xs font-medium ${validationClass}">${validationLabel}</span>
-          ${r.comparison_status ? `<span class="px-3 py-1 rounded-full text-xs font-medium bg-facer-accent/20 text-facer-accent">${comparisonLabels[r.comparison_status] || r.comparison_status}</span>` : ""}
-        </div>
-
-        <!-- Scores -->
-        <div class="grid grid-cols-3 gap-2 mb-4">
-          <div class="bg-facer-surface rounded-xl p-3 text-center border border-facer-border">
-            <div class="text-lg font-semibold text-facer-text">${r.extraction_confidence !== null ? Math.round(r.extraction_confidence * 100) + "%" : "—"}</div>
-            <div class="text-xs text-facer-text-muted">Confianza OCR</div>
-          </div>
-          <div class="bg-facer-surface rounded-xl p-3 text-center border border-facer-border">
-            <div class="text-lg font-semibold text-facer-text">${r.comparison_score !== null ? Math.round(r.comparison_score * 100) + "%" : "—"}</div>
-            <div class="text-xs text-facer-text-muted">Comparación</div>
-          </div>
-          <div class="bg-facer-surface rounded-xl p-3 text-center border border-facer-border">
-            <div class="text-lg font-semibold text-facer-text">${r.capture_quality_score !== null ? Math.round(r.capture_quality_score * 100) + "%" : "—"}</div>
-            <div class="text-xs text-facer-text-muted">Calidad</div>
-          </div>
+          ${r.extraction_confidence !== null ? `<span class="px-3 py-1 rounded-full text-xs font-medium bg-facer-accent/20 text-facer-accent">Confianza: ${Math.round(r.extraction_confidence * 100)}%</span>` : ""}
         </div>
 
         <!-- Extracted fields -->
