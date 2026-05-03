@@ -554,7 +554,6 @@ function renderResults() {
     domicilio: "Domicilio",
     sexo: "Sexo",
     clave_elector: "Clave de elector",
-    seccion: "Sección",
   };
 
   const genericFieldLabels: Record<string, string> = {
