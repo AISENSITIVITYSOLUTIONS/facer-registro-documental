@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from app.config import settings
 from app.db import Base, SessionLocal, engine
@@ -93,3 +97,18 @@ app.include_router(
     prefix=settings.api_v1_prefix,
     dependencies=[Depends(api_key_auth)],
 )
+
+# Serve frontend static files from /static directory
+_static_dir = Path(__file__).resolve().parent.parent / "static"
+if _static_dir.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(_static_dir / "assets")), name="static-assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        """Serve the SPA index.html for any non-API route."""
+        # Try to serve the exact file first
+        file_path = _static_dir / full_path
+        if full_path and file_path.is_file():
+            return FileResponse(str(file_path))
+        # Fall back to index.html for SPA routing
+        return FileResponse(str(_static_dir / "index.html"))

@@ -1,7 +1,7 @@
 // API client for facer-registro-documental
 // Configuration is hardcoded - no user input needed
 
-const API_BASE_URL = "https://registro-documental-344497085765.us-central1.run.app";
+const API_BASE_URL = ""; // Same origin - frontend served from same Cloud Run service
 const API_KEY = "FaceR2026Key";
 
 function headers(): HeadersInit {
