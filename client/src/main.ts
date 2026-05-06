@@ -541,92 +541,37 @@ function renderResults() {
   if (!r) return;
 
   const fields = r.extracted_fields || {};
-
-  // Prioritize INE-specific fields if available
-  const ineFieldLabels: Record<string, string> = {
-    nombre: "Nombre(s)",
-    apellido_paterno: "Apellido paterno",
-    apellido_materno: "Apellido materno",
-    nombre_completo: "Nombre completo",
-    nacionalidad: "Nacionalidad",
-    fecha_nacimiento: "Fecha de nacimiento",
-    curp: "CURP",
-    domicilio: "Domicilio",
-    sexo: "Sexo",
-    clave_elector: "Clave de elector",
-  };
-
-  const genericFieldLabels: Record<string, string> = {
-    full_name: "Nombre completo",
-    first_name: "Nombre(s)",
-    last_name: "Apellido(s)",
-    birth_date: "Fecha de nacimiento",
-    sex: "Sexo",
-    national_id: "Clave de elector",
-    document_number: "Número de documento",
-    curp: "CURP",
-    nationality: "Nacionalidad",
-    issue_date: "Fecha de emisión",
-    expiration_date: "Fecha de expiración",
-  };
-
-  // Use INE fields if nombre_completo or curp is present (INE document)
-  const isINE = fields.nombre_completo || fields.nombre || fields.curp;
-  const fieldLabels = isINE ? ineFieldLabels : genericFieldLabels;
-
-  const statusColors: Record<string, string> = {
-    valid: "bg-facer-success/20 text-facer-success",
-    pending: "bg-facer-warning/20 text-facer-warning",
-    needs_review: "bg-facer-warning/20 text-facer-warning",
-    invalid: "bg-facer-error/20 text-facer-error",
-  };
-
-  const statusLabels: Record<string, string> = {
-    valid: "Válido",
-    pending: "Pendiente",
-    needs_review: "Requiere revisión",
-    invalid: "Inválido",
-  };
-
-  const validationClass = statusColors[r.validation_status] || statusColors.pending;
-  const validationLabel = statusLabels[r.validation_status] || r.validation_status;
-
-  // Only show fields that have a label defined and have a value
-  const fieldRows = Object.entries(fieldLabels)
-    .filter(([k]) => fields[k] !== null && fields[k] !== undefined && fields[k] !== "")
-    .map(
-      ([k, label]) => `
-      <div class="flex justify-between items-start py-2.5 border-b border-facer-border/50 last:border-0">
-        <span class="text-sm text-facer-text-muted">${label}</span>
-        <span class="text-sm font-medium text-facer-text text-right max-w-[60%]">${fields[k]}</span>
-      </div>
-    `,
-    )
-    .join("");
+  const nombreCompleto = fields.nombre_completo || fields.full_name || "";
 
   app.innerHTML = `
     <div class="min-h-screen flex items-center justify-center p-4">
       <div class="w-full max-w-md fade-in">
-        ${headerHTML("Resultados", "Datos extraídos del documento")}
+        ${headerHTML("Documento Validado")}
         
-        <!-- Status badge -->
-        <div class="flex gap-2 justify-center mb-4">
-          <span class="px-3 py-1 rounded-full text-xs font-medium ${validationClass}">${validationLabel}</span>
-          ${r.extraction_confidence !== null ? `<span class="px-3 py-1 rounded-full text-xs font-medium bg-facer-accent/20 text-facer-accent">Confianza: ${Math.round(r.extraction_confidence * 100)}%</span>` : ""}
+        <!-- Success indicator -->
+        <div class="flex justify-center mb-6">
+          <div class="w-20 h-20 rounded-full bg-facer-success/20 flex items-center justify-center">
+            <svg class="w-10 h-10 text-facer-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+            </svg>
+          </div>
         </div>
 
-        <!-- Extracted fields -->
+        <!-- Validation message -->
         <div class="bg-facer-surface rounded-2xl border border-facer-border shadow-xl overflow-hidden">
-          <div class="p-4 border-b border-facer-border">
-            <h3 class="text-sm font-medium text-facer-text">Campos extraídos</h3>
-          </div>
-          <div class="p-4">
-            ${fieldRows || `<p class="text-sm text-facer-text-muted text-center py-4">No se extrajeron campos</p>`}
+          <div class="p-6 text-center">
+            <p class="text-lg font-semibold text-facer-text mb-2">Tu documento ha sido validado</p>
+            ${nombreCompleto ? `
+              <div class="mt-4 pt-4 border-t border-facer-border/50">
+                <p class="text-xs text-facer-text-muted mb-1">Nombre registrado</p>
+                <p class="text-base font-medium text-facer-text">${nombreCompleto}</p>
+              </div>
+            ` : ""}
           </div>
         </div>
 
         <!-- Actions -->
-        <div class="flex gap-3 mt-4">
+        <div class="flex gap-3 mt-6">
           <button id="res-new" class="btn-primary flex-1 py-3 rounded-xl text-white font-medium text-sm cursor-pointer border-0">
             Nuevo documento
           </button>

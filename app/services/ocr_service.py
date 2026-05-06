@@ -49,6 +49,63 @@ class OCRService:
             detail="El motor OCR configurado no es válido.",
         )
 
+    def extract_text_with_variant(self, image_bytes: bytes, variant_name: str) -> dict[str, Any]:
+        """Extract text using a specific image preprocessing variant.
+
+        This is used for OCR retries where the default preferred variant
+        did not yield all required fields.
+        """
+        variants = self._build_variants(image_bytes)
+        target_variant = None
+        for v in variants:
+            if v["name"] == variant_name:
+                target_variant = v
+                break
+
+        if target_variant is None:
+            # Fallback to preferred variant if requested name not found
+            target_variant = self.preprocessor.select_preferred_variant(variants)
+
+        if self.engine == "google_vision":
+            result = self._extract_with_google_vision(target_variant["bytes"])
+            result["preprocessing_variant"] = target_variant["name"]
+            return result
+
+        if self.engine == "tesseract":
+            # For tesseract, run only on the target variant
+            from PIL import Image
+            from io import BytesIO
+            image = Image.open(BytesIO(target_variant["bytes"]))
+            try:
+                data = pytesseract.image_to_data(
+                    image,
+                    lang=settings.tesseract_languages,
+                    config=f"--oem 3 --psm {settings.tesseract_page_segmentation_mode}",
+                    output_type=TesseractOutput.DICT,
+                )
+                text = pytesseract.image_to_string(
+                    image,
+                    lang=settings.tesseract_languages,
+                    config=f"--oem 3 --psm {settings.tesseract_page_segmentation_mode}",
+                )
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Error en OCR Tesseract con variante {variant_name}: {exc}",
+                ) from exc
+            confidence = self._compute_tesseract_confidence(data)
+            return {
+                "text": text.strip(),
+                "confidence": confidence,
+                "engine": "tesseract",
+                "preprocessing_variant": target_variant["name"],
+            }
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="El motor OCR configurado no es válido.",
+        )
+
     def _build_variants(self, image_bytes: bytes) -> list[dict[str, Any]]:
         if not settings.enable_image_preprocessing:
             return [{"name": "original", "bytes": image_bytes}]

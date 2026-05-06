@@ -164,6 +164,40 @@ def _determine_validation_status(
     return validation_status
 
 
+# ── INE Required Fields Validation ────────────────────────────────────────────
+
+# Campos que DEBEN estar presentes para considerar el OCR del INE como exitoso.
+_INE_REQUIRED_FIELDS: list[str] = [
+    "nombre",
+    "apellido_paterno",
+    "nombre_completo",
+    "curp",
+    "domicilio",
+]
+
+# Variantes de imagen a intentar en orden durante reintentos de OCR.
+# La primera (high_contrast_sharpened) ya se usa por defecto,
+# así que los reintentos prueban las demás.
+_OCR_RETRY_VARIANTS: list[str] = [
+    "grayscale_autocontrast",
+    "original",
+    "binary_document",
+]
+
+
+def _validate_ine_required_fields(ine_fields: dict[str, Any]) -> list[str]:
+    """Return a list of missing required field names.
+
+    If the list is empty, all required fields are present.
+    """
+    missing: list[str] = []
+    for field in _INE_REQUIRED_FIELDS:
+        value = ine_fields.get(field)
+        if not value or (isinstance(value, str) and not value.strip()):
+            missing.append(field)
+    return missing
+
+
 # ── Combined Upload + Process ──────────────────────────────────────────────────
 
 
@@ -256,10 +290,57 @@ async def upload_and_process_document(
     parsing_result: dict[str, Any] | None = None
 
     try:
+        # ── OCR + Parse with automatic retry for INE ─────────────────────
         ocr_result = ocr_service.extract_text(image_bytes)
 
         if document.document_type == DocumentType.INE:
             ine_fields = ine_parsing_service.parse(ocr_result["text"])
+            missing_fields = _validate_ine_required_fields(ine_fields)
+
+            # Retry OCR with different image variants if required fields are missing
+            retry_idx = 0
+            while missing_fields and retry_idx < len(_OCR_RETRY_VARIANTS):
+                variant_name = _OCR_RETRY_VARIANTS[retry_idx]
+                retry_idx += 1
+                logger.warning(
+                    "INE OCR retry %d/%d (variant=%s): missing fields %s",
+                    retry_idx,
+                    len(_OCR_RETRY_VARIANTS),
+                    variant_name,
+                    missing_fields,
+                )
+                audit_service.log_document_action(
+                    db=db,
+                    document=document,
+                    action="ocr_retry",
+                    details={
+                        "retry_number": retry_idx,
+                        "variant": variant_name,
+                        "missing_fields": missing_fields,
+                    },
+                )
+                db.commit()
+
+                # Retry with a different image variant
+                ocr_result = ocr_service.extract_text_with_variant(image_bytes, variant_name)
+                ine_fields = ine_parsing_service.parse(ocr_result["text"])
+                missing_fields = _validate_ine_required_fields(ine_fields)
+
+            # If still missing fields after all retries, raise an error
+            if missing_fields:
+                logger.error(
+                    "INE OCR failed after %d retries. Still missing: %s",
+                    len(_OCR_RETRY_VARIANTS),
+                    missing_fields,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        "No se pudieron extraer todos los campos requeridos del documento. "
+                        "Por favor, intenta de nuevo con una foto más clara y bien iluminada."
+                    ),
+                )
+
             extracted_fields: dict[str, Any] = ine_fields
 
             # Save to documentos_ine_mexico table
@@ -287,13 +368,13 @@ async def upload_and_process_document(
             )
             extracted_fields = parsing_result["fields"]
 
-        # ── Compare against user ───────────────────────────────────────────
+        # ── Compare against user ─────────────────────────────────────────
         comparison_result = comparison_service.compare_user_against_document(
             user=user,
             extracted_fields=extracted_fields,
         )
 
-        # ── Determine validation status ────────────────────────────────────
+        # ── Determine validation status ──────────────────────────────────
         validation_status = _determine_validation_status(
             document_type=document.document_type,
             extracted_fields=extracted_fields,
@@ -327,7 +408,14 @@ async def upload_and_process_document(
         db.commit()
         db.refresh(document)
 
+        # ── Only expose nombre_completo to the frontend (privacy) ───────────
+        # All fields are stored in the DB, but the API response only
+        # returns the full name for display purposes.
         sanitized_fields = _sanitize_for_json(extracted_fields)
+        safe_fields_for_frontend: dict[str, Any] = {
+            "nombre_completo": sanitized_fields.get("nombre_completo") or sanitized_fields.get("full_name"),
+        }
+
         return DocumentProcessResponse(
             id=document.id,
             uuid=document.uuid,
@@ -337,7 +425,7 @@ async def upload_and_process_document(
             comparison_score=document.comparison_score,
             extraction_confidence=document.extraction_confidence,
             capture_quality_score=document.capture_quality_score,
-            extracted_fields=sanitized_fields,
+            extracted_fields=safe_fields_for_frontend,
         )
     except HTTPException:
         db.rollback()
