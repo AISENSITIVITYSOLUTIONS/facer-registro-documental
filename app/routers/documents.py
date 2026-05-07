@@ -297,7 +297,12 @@ async def upload_and_process_document(
             ine_fields = ine_parsing_service.parse(ocr_result["text"])
             missing_fields = _validate_ine_required_fields(ine_fields)
 
-            # Retry OCR with different image variants if required fields are missing
+            # Retry OCR with different image variants if required fields are missing.
+            # IMPORTANT: We MERGE results across retries — keep fields that were
+            # already extracted correctly and only fill in the missing ones.
+            # This prevents a worse OCR variant from overwriting good data.
+            best_fields = dict(ine_fields)  # Start with the first attempt's results
+
             retry_idx = 0
             while missing_fields and retry_idx < len(_OCR_RETRY_VARIANTS):
                 variant_name = _OCR_RETRY_VARIANTS[retry_idx]
@@ -323,22 +328,40 @@ async def upload_and_process_document(
 
                 # Retry with a different image variant
                 ocr_result = ocr_service.extract_text_with_variant(image_bytes, variant_name)
-                ine_fields = ine_parsing_service.parse(ocr_result["text"])
-                missing_fields = _validate_ine_required_fields(ine_fields)
+                retry_fields = ine_parsing_service.parse(ocr_result["text"])
 
-            # If still missing fields after all retries, raise an error
+                # Merge: only fill in fields that are currently missing/empty
+                for field_name in list(missing_fields):
+                    new_value = retry_fields.get(field_name)
+                    if new_value and (isinstance(new_value, str) and new_value.strip()):
+                        best_fields[field_name] = new_value
+
+                # Rebuild nombre_completo if we got new name parts
+                if any(f in ["nombre", "apellido_paterno", "apellido_materno"] for f in missing_fields):
+                    rebuilt_name = " ".join(
+                        p for p in [
+                            best_fields.get("apellido_paterno"),
+                            best_fields.get("apellido_materno"),
+                            best_fields.get("nombre"),
+                        ] if p
+                    )
+                    if rebuilt_name:
+                        best_fields["nombre_completo"] = rebuilt_name
+                        best_fields["full_name"] = rebuilt_name
+
+                missing_fields = _validate_ine_required_fields(best_fields)
+
+            # Use the merged best_fields as the final result
+            ine_fields = best_fields
+
+            # If still missing fields after all retries, log a warning but
+            # do NOT block the user — proceed with whatever we have.
+            # The validation_status will reflect the incomplete extraction.
             if missing_fields:
-                logger.error(
-                    "INE OCR failed after %d retries. Still missing: %s",
+                logger.warning(
+                    "INE OCR incomplete after %d retries. Still missing: %s. Proceeding with partial data.",
                     len(_OCR_RETRY_VARIANTS),
                     missing_fields,
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=(
-                        "No se pudieron extraer todos los campos requeridos del documento. "
-                        "Por favor, intenta de nuevo con una foto más clara y bien iluminada."
-                    ),
                 )
 
             extracted_fields: dict[str, Any] = ine_fields

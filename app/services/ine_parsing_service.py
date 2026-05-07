@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 _STOP_LABELS = frozenset([
     "DOMICILIO", "CURP", "CLAVE", "SECCION", "VIGENCIA", "FECHA",
     "ESTADO", "MUNICIPIO", "EMISION", "LOCALIDAD", "AÑO",
+    "NACIMIENTO", "REGISTRO", "SEXO", "NACIONALIDAD",
 ])
 
 # Labels that signal the end of the address block
@@ -146,11 +147,29 @@ class INEParsingService:
                 return True
         return False
 
-    @staticmethod
-    def _looks_like_name(value: str) -> bool:
-        """Check if a string looks like a name (only letters and spaces)."""
+    # Words that should NEVER be accepted as a person's name
+    _NOT_A_NAME = frozenset([
+        "FECHA", "NACIMIENTO", "FECHA DE NACIMIENTO", "DOMICILIO",
+        "CURP", "CLAVE", "ELECTOR", "SECCION", "VIGENCIA",
+        "SEXO", "NACIONALIDAD", "REGISTRO", "EMISION",
+        "ESTADO", "MUNICIPIO", "LOCALIDAD", "INSTITUTO",
+        "NACIONAL", "ELECTORAL", "CREDENCIAL",
+    ])
+
+    @classmethod
+    def _looks_like_name(cls, value: str) -> bool:
+        """Check if a string looks like a name (only letters and spaces, not a known label)."""
         cleaned = re.sub(r"[^A-ZÁÉÍÓÚÑÜ\s]", "", value.upper()).strip()
-        return len(cleaned) >= 2 and not re.search(r"\d{3,}", value)
+        if len(cleaned) < 2 or re.search(r"\d{3,}", value):
+            return False
+        # Reject if the entire string matches a known INE label
+        if cleaned in cls._NOT_A_NAME:
+            return False
+        # Reject if it starts with a known label word
+        first_word = cleaned.split()[0] if cleaned.split() else ""
+        if first_word in cls._NOT_A_NAME:
+            return False
+        return True
 
     # ── Name Block Extraction (Modern INE) ─────────────────────────────────
 
