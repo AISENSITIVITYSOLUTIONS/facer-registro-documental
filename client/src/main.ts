@@ -542,31 +542,53 @@ function renderResults() {
 
   const fields = r.extracted_fields || {};
   const nombreCompleto = fields.nombre_completo || fields.full_name || "";
+  const isValid = r.validation_status === "valid";
+  const confidence = r.extraction_confidence != null ? Math.round(r.extraction_confidence * 100) : null;
 
   app.innerHTML = `
     <div class="min-h-screen flex items-center justify-center p-4">
       <div class="w-full max-w-md fade-in">
-        ${headerHTML("Documento Validado")}
-        
-        <!-- Success indicator -->
-        <div class="flex justify-center mb-6">
-          <div class="w-20 h-20 rounded-full bg-facer-success/20 flex items-center justify-center">
-            <svg class="w-10 h-10 text-facer-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-            </svg>
+        <!-- Logo + FaceR -->
+        <div class="text-center mb-8">
+          <div class="flex items-center justify-center gap-3 mb-3">
+            <div class="w-10 h-10 rounded-lg bg-facer-accent/20 flex items-center justify-center">
+              <svg class="w-6 h-6 text-facer-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+              </svg>
+            </div>
+            <h1 class="text-2xl font-semibold tracking-tight">FaceR</h1>
           </div>
+          <p class="text-sm text-facer-text-muted mt-1">Dato validado</p>
         </div>
 
-        <!-- Validation message -->
+        <!-- Validation badges -->
+        <div class="flex items-center justify-center gap-3 mb-6">
+          <span class="px-3 py-1 rounded-full text-xs font-semibold ${
+            isValid
+              ? "bg-facer-success/20 text-facer-success border border-facer-success/30"
+              : "bg-facer-error/20 text-facer-error border border-facer-error/30"
+          }">${isValid ? "Válido" : "Inválido"}</span>
+          ${confidence != null ? `
+            <span class="px-3 py-1 rounded-full text-xs font-semibold bg-facer-accent/20 text-facer-accent border border-facer-accent/30">
+              Confianza: ${confidence}%
+            </span>
+          ` : ""}
+        </div>
+
+        <!-- User data card -->
         <div class="bg-facer-surface rounded-2xl border border-facer-border shadow-xl overflow-hidden">
-          <div class="p-6 text-center">
-            <p class="text-lg font-semibold text-facer-text mb-2">Tu documento ha sido validado</p>
+          <div class="px-5 py-3 border-b border-facer-border/50">
+            <p class="text-sm font-medium text-facer-text-muted">Dato de usuario</p>
+          </div>
+          <div class="p-5">
             ${nombreCompleto ? `
-              <div class="mt-4 pt-4 border-t border-facer-border/50">
-                <p class="text-xs text-facer-text-muted mb-1">Nombre registrado</p>
-                <p class="text-base font-medium text-facer-text">${nombreCompleto}</p>
+              <div class="flex items-start justify-between gap-3">
+                <span class="text-sm text-facer-text-muted shrink-0">Nombre completo</span>
+                <span class="text-sm font-semibold text-facer-text text-right">${nombreCompleto}</span>
               </div>
-            ` : ""}
+            ` : `
+              <p class="text-sm text-facer-text-muted text-center">No se pudo extraer el nombre</p>
+            `}
           </div>
         </div>
 
@@ -575,12 +597,26 @@ function renderResults() {
           <button id="res-new" class="btn-primary flex-1 py-3 rounded-xl text-white font-medium text-sm cursor-pointer border-0">
             Nuevo documento
           </button>
+          <button id="res-finish" class="btn-secondary flex-1 py-3 rounded-xl text-facer-text font-medium text-sm cursor-pointer border border-facer-border">
+            Finalizar
+          </button>
         </div>
       </div>
     </div>
   `;
 
   document.getElementById("res-new")!.addEventListener("click", () => {
+    state.capturedBlob = null;
+    state.capturedUrl = "";
+    state.compressedBlob = null;
+    state.compressionInfo = null;
+    state.analysis = null;
+    state.results = null;
+    state.screen = "select";
+    render();
+  });
+
+  document.getElementById("res-finish")!.addEventListener("click", () => {
     state.capturedBlob = null;
     state.capturedUrl = "";
     state.compressedBlob = null;

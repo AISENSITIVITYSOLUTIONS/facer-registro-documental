@@ -249,10 +249,16 @@ class INEParsingService:
         if len(name_lines) == 0:
             return None, None, None
         elif len(name_lines) == 1:
-            # Only one name line - could be just the apellido paterno or full name
-            return name_lines[0], name_lines[0], None
+            # Only one name line extracted. This could be:
+            # - A single apellido paterno (if OCR only got one line)
+            # - A full name on one line (rare in INE format)
+            # We assign it as apellido_paterno only (NOT duplicated as nombre)
+            # to avoid "WINIK IVANOVICH WINIK IVANOVICH" in nombre_completo.
+            # The nombre field will be filled by the labeled fallback or remain None.
+            return None, name_lines[0], None
         elif len(name_lines) == 2:
             # Two lines: apellido paterno + nombre (or apellido paterno + materno)
+            # INE format: first line after NOMBRE is apellido paterno, second is apellido materno or nombre
             return name_lines[1], name_lines[0], None
         else:
             # Three lines: apellido paterno, apellido materno, nombre(s)
@@ -471,6 +477,13 @@ class INEParsingService:
 
     @staticmethod
     def _build_full_name(ap_paterno: str | None, ap_materno: str | None, nombre: str | None) -> str | None:
-        """Build full name in INE order: APELLIDO_PATERNO APELLIDO_MATERNO NOMBRE(S)."""
-        parts = [p for p in [ap_paterno, ap_materno, nombre] if p]
+        """Build full name in INE order: APELLIDO_PATERNO APELLIDO_MATERNO NOMBRE(S).
+        
+        Includes deduplication: if any part is identical to another, it's only
+        included once to prevent 'WINIK IVANOVICH WINIK IVANOVICH' type errors.
+        """
+        parts: list[str] = []
+        for p in [ap_paterno, ap_materno, nombre]:
+            if p and p not in parts:
+                parts.append(p)
         return " ".join(parts) if parts else None
