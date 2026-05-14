@@ -222,8 +222,10 @@ async def upload_and_process_document(
     from app.models import CountryCode, DocumentType as DT
 
     try:
-        country_enum = CountryCode(country)
-        document_type_enum = DT(document_type)
+        logger.warning("country=%r document_type=%r", country, document_type)
+        country_enum = CountryCode(country.strip().upper())
+        document_type_enum = DT(document_type.strip().upper())
+
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -519,8 +521,10 @@ async def upload_document(
     from app.models import CountryCode, DocumentType as DT
 
     try:
-        country_enum = CountryCode(country)
-        document_type_enum = DT(document_type)
+        logger.warning("country=%r document_type=%r", country, document_type)
+        country_enum = CountryCode(country.strip().upper())
+        document_type_enum = DT(document_type.strip().upper())
+
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="País o tipo documental inválido.") from exc
 
