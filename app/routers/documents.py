@@ -1,7 +1,9 @@
 from __future__ import annotations
+from difflib import SequenceMatcher
 
 import logging
 import traceback
+import unicodedata
 from datetime import date, datetime
 from typing import Any
 
@@ -93,6 +95,33 @@ def _safe_str(value: Any) -> str | None:
         return None
     s = str(value).strip()
     return s if s else None
+
+
+def _normalize_name(name: str) -> str:
+    """Normalize a name for comparison: uppercase, strip accents, collapse whitespace."""
+    name = name.upper().strip()
+    # Remove accents (NFD decomposition + strip combining marks)
+    name = unicodedata.normalize("NFD", name)
+    name = "".join(ch for ch in name if unicodedata.category(ch) != "Mn")
+    # Collapse multiple spaces
+    name = " ".join(name.split())
+    return name
+
+
+def nombres_coinciden(nombre_ine: str, nombre_db: str, umbral: float = 0.75) -> bool:
+    """Compare the name extracted from the INE against the name registered in the DB.
+
+    Returns True if the similarity ratio is >= *umbral* (75% by default).
+    Uses SequenceMatcher after normalizing both names (uppercase, no accents).
+    """
+    nombre_ine_norm = _normalize_name(nombre_ine)
+    nombre_db_norm = _normalize_name(nombre_db)
+    similitud = SequenceMatcher(None, nombre_ine_norm, nombre_db_norm).ratio()
+    logger.info(
+        "nombres_coinciden: INE=%r, DB=%r, similitud=%.4f, umbral=%.2f",
+        nombre_ine_norm, nombre_db_norm, similitud, umbral,
+    )
+    return similitud >= umbral
 
 
 def _update_document_with_extraction(
@@ -367,6 +396,26 @@ async def upload_and_process_document(
                 )
 
             extracted_fields: dict[str, Any] = ine_fields
+
+            # ── Validate INE name against registered user ────────────────
+            nombre_ine = ine_fields.get("nombre_completo") or ""
+            nombre_usuario = " ".join(filter(None, [
+                getattr(user, "first_name", "") or "",
+                getattr(user, "last_name", "") or "",
+            ]))
+            if nombre_ine and nombre_usuario:
+                if not nombres_coinciden(nombre_ine, nombre_usuario):
+                    logger.warning(
+                        "INE name mismatch for user_id=%s: INE=%r vs DB=%r",
+                        user_id, nombre_ine, nombre_usuario,
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=(
+                            "El nombre en la INE no coincide con el nombre registrado. "
+                            "Verifique que el documento pertenece al usuario correcto."
+                        ),
+                    )
 
             # Save to documentos_ine_mexico table
             ine_repository.create(
