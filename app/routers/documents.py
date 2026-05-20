@@ -412,8 +412,7 @@ async def upload_and_process_document(
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail=(
-                            "El nombre en la INE no coincide con el nombre registrado. "
-                            "Verifique que el documento pertenece al usuario correcto."
+                            "La validación no tuvo éxito: Verifica que el documento cargado sea el correcto."
                         ),
                     )
 

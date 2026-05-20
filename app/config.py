@@ -55,7 +55,10 @@ class Settings(BaseSettings):
     allowed_mime_types: str = "image/jpeg,image/png,image/jpg"
 
     api_key: str = ""  # Required for production. Set via API_KEY env var.
-    cors_origins: str = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173,https://biometricsnni.web.app,https://biometricsnni.firebaseapp.com" )
+    cors_origins: str = (
+        "http://localhost:3000,http://localhost:5173,"
+        "https://biometricsnni.web.app,https://biometricsnni.firebaseapp.com"
+    )
 
     @computed_field  # type: ignore[misc]
     @property
