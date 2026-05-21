@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import get_db
 from app.models import ComparisonStatus, DocumentProcessingStatus, DocumentType, ValidationStatus
-from app.repositories import DocumentRepository, INERepository, UserRepository
+from app.repositories import DocumentRepository, INERepository
 from app.schemas import (
     DocumentCaptureAnalysisResponse,
     DocumentConfirmResponse,
@@ -23,14 +23,14 @@ from app.schemas import (
     DocumentRetryResponse,
     DocumentUploadResponse,
 )
-from app.services import AuditService, ComparisonService, INEParsingService, OCRService, ParsingService, StorageService
+from app.services import AuditService, ComparisonService, INEParsingService, OCRService, ParsingService, RemoteUserService, StorageService
 from app.utils import evaluate_image_quality, validate_country_document_type, validate_upload_file
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
-user_repository = UserRepository()
+remote_user_service = RemoteUserService()
 document_repository = DocumentRepository()
 ine_repository = INERepository()
 audit_service = AuditService()
@@ -243,10 +243,8 @@ async def upload_and_process_document(
     This avoids the issue of ephemeral storage on Cloud Run where
     the file might not be available for a subsequent ``/process`` call.
     """
-    # ── Validate user ──────────────────────────────────────────────────────
-    user = user_repository.get_by_id(db, user_id)
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado.")
+    # ── Validate user (remote: biometria-api) ─────────────────────────────
+    user = remote_user_service.get_by_id(user_id)
 
     from app.models import CountryCode, DocumentType as DT
 
@@ -562,9 +560,8 @@ async def upload_document(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ) -> DocumentUploadResponse:
-    user = user_repository.get_by_id(db, user_id)
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado.")
+    # Validate user (remote: biometria-api)
+    user = remote_user_service.get_by_id(user_id)
 
     from app.models import CountryCode, DocumentType as DT
 
@@ -633,9 +630,8 @@ def process_document(document_id: int, db: Session = Depends(get_db)) -> Documen
     if document.status == DocumentProcessingStatus.CONFIRMED:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El documento ya fue confirmado.")
 
-    user = user_repository.get_by_id(db, document.user_id)
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado.")
+    # Validate user (remote: biometria-api)
+    user = remote_user_service.get_by_id(document.user_id)
 
     document_repository.update(db, document, status=DocumentProcessingStatus.PROCESSING)
     audit_service.log_document_action(db=db, document=document, action="document_processing_started", details=None)

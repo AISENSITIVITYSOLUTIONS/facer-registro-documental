@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     allowed_mime_types: str = "image/jpeg,image/png,image/jpg"
 
     api_key: str = ""  # Required for production. Set via API_KEY env var.
+    biometria_api_url: str = "https://biometria-api-344497085765.us-central1.run.app"  # Base URL of biometria-api service.
     cors_origins: str = (
         "http://localhost:3000,http://localhost:5173,"
         "https://biometricsnni.web.app,https://biometricsnni.firebaseapp.com"

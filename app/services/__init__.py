@@ -4,6 +4,7 @@ from app.services.image_preprocessing_service import ImagePreprocessingService
 from app.services.ine_parsing_service import INEParsingService
 from app.services.ocr_service import OCRService
 from app.services.parsing_service import ParsingService
+from app.services.remote_user_service import RemoteUserService
 from app.services.storage_service import StorageService
 
 __all__ = [
@@ -13,5 +14,6 @@ __all__ = [
     "INEParsingService",
     "OCRService",
     "ParsingService",
+    "RemoteUserService",
     "StorageService",
 ]
