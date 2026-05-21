@@ -904,3 +904,35 @@ async def retry_document(
         capture_quality_score=document.capture_quality_score,
         retry_count=retry_count + 1,
     )
+
+
+# ── Debug endpoint (temporary) ────────────────────────────────────────────────
+
+
+@router.get("/debug-name-comparison")
+def debug_name_comparison(nombre_ine: str, nombre_db: str):
+    """Temporary debug endpoint to verify token-sorted name comparison is deployed."""
+    nombre_ine_norm = _normalize_name(nombre_ine)
+    nombre_db_norm = _normalize_name(nombre_db)
+
+    similitud_directa = SequenceMatcher(None, nombre_ine_norm, nombre_db_norm).ratio()
+
+    ine_sorted = " ".join(sorted(nombre_ine_norm.split()))
+    db_sorted = " ".join(sorted(nombre_db_norm.split()))
+    similitud_sorted = SequenceMatcher(None, ine_sorted, db_sorted).ratio()
+
+    similitud = max(similitud_directa, similitud_sorted)
+
+    return {
+        "nombre_ine_original": nombre_ine,
+        "nombre_db_original": nombre_db,
+        "nombre_ine_normalized": nombre_ine_norm,
+        "nombre_db_normalized": nombre_db_norm,
+        "ine_sorted": ine_sorted,
+        "db_sorted": db_sorted,
+        "similitud_directa": round(similitud_directa, 4),
+        "similitud_sorted": round(similitud_sorted, 4),
+        "similitud_best": round(similitud, 4),
+        "match": similitud >= 0.75,
+        "version": "3.1.0-token-sorted",
+    }
