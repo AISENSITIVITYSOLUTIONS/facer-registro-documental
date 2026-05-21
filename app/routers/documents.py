@@ -113,13 +113,26 @@ def nombres_coinciden(nombre_ine: str, nombre_db: str, umbral: float = 0.75) -> 
 
     Returns True if the similarity ratio is >= *umbral* (75% by default).
     Uses SequenceMatcher after normalizing both names (uppercase, no accents).
+    Also tries token-sorted comparison to handle name order differences
+    (INE uses apellidos-primero, DB may use nombre-primero).
     """
     nombre_ine_norm = _normalize_name(nombre_ine)
     nombre_db_norm = _normalize_name(nombre_db)
-    similitud = SequenceMatcher(None, nombre_ine_norm, nombre_db_norm).ratio()
+
+    # Direct comparison
+    similitud_directa = SequenceMatcher(None, nombre_ine_norm, nombre_db_norm).ratio()
+
+    # Token-sorted comparison (handles name order differences)
+    ine_sorted = " ".join(sorted(nombre_ine_norm.split()))
+    db_sorted = " ".join(sorted(nombre_db_norm.split()))
+    similitud_sorted = SequenceMatcher(None, ine_sorted, db_sorted).ratio()
+
+    # Use the best of both comparisons
+    similitud = max(similitud_directa, similitud_sorted)
+
     logger.info(
-        "nombres_coinciden: INE=%r, DB=%r, similitud=%.4f, umbral=%.2f",
-        nombre_ine_norm, nombre_db_norm, similitud, umbral,
+        "nombres_coinciden: INE=%r, DB=%r, directa=%.4f, sorted=%.4f, best=%.4f, umbral=%.2f",
+        nombre_ine_norm, nombre_db_norm, similitud_directa, similitud_sorted, similitud, umbral,
     )
     return similitud >= umbral
 
