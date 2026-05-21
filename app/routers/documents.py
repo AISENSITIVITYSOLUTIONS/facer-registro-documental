@@ -450,18 +450,16 @@ async def upload_and_process_document(
                 getattr(user, "last_name", "") or "",
             ]))
 
+            # Name comparison is now a soft warning (non-blocking).
+            # The result is logged and stored in the DB for manual review,
+            # but the user is NOT blocked from proceeding.
+            name_match_warning = False
             if nombre_ine and nombre_usuario:
                 if not nombres_coinciden(nombre_ine, nombre_usuario):
+                    name_match_warning = True
                     logger.warning(
-                        "INE name mismatch for user_id=%s: INE=%r vs DB=%r (parts: nombre=%r, ap=%r, am=%r)",
+                        "INE name mismatch (soft warning) for user_id=%s: INE=%r vs DB=%r (parts: nombre=%r, ap=%r, am=%r)",
                         user_id, nombre_ine, nombre_usuario, ine_nombre, ine_ap, ine_am,
-                    )
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=(
-                            f"La validación no tuvo éxito: Verifica que el documento cargado sea el correcto. "
-                            f"[DEBUG: INE='{nombre_ine}' vs DB='{nombre_usuario}']"
-                        ),
                     )
 
             # Save to documentos_ine_mexico table
@@ -483,6 +481,9 @@ async def upload_and_process_document(
                 creado_por=f"user_{document.user_id}",
             )
         else:
+            name_match_warning = False
+            nombre_ine = ""
+            nombre_usuario = ""
             parsing_result = parsing_service.parse_document(
                 document_type=document.document_type,
                 raw_text=ocr_result["text"],
@@ -524,6 +525,9 @@ async def upload_and_process_document(
                 "validation_status": validation_status.value,
                 "ocr_engine": ocr_result.get("engine"),
                 "combined_endpoint": True,
+                "name_match_warning": name_match_warning,
+                "nombre_ine": nombre_ine if name_match_warning else None,
+                "nombre_db": nombre_usuario if name_match_warning else None,
             }),
         )
         db.commit()
