@@ -246,10 +246,10 @@ _INE_REQUIRED_FIELDS: list[str] = [
 # Variantes de imagen a intentar en orden durante reintentos de OCR.
 # La primera (high_contrast_sharpened) ya se usa por defecto,
 # así que los reintentos prueban las demás.
+# Reduced to 1 retry for performance (name comparison is non-blocking now,
+# so we don't need perfect OCR extraction to avoid user friction).
 _OCR_RETRY_VARIANTS: list[str] = [
     "grayscale_autocontrast",
-    "original",
-    "binary_document",
 ]
 
 

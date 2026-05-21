@@ -6,10 +6,22 @@ from typing import Any
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 
+# Maximum dimension for OCR processing. Larger images are resized down
+# to speed up Tesseract without losing text readability.
+_MAX_OCR_DIMENSION = 2000
+
+
 class ImagePreprocessingService:
     def build_variants(self, image_bytes: bytes) -> list[dict[str, Any]]:
         image = Image.open(BytesIO(image_bytes))
         image = ImageOps.exif_transpose(image).convert("RGB")
+
+        # Resize large images to speed up OCR (phone cameras produce 4000x3000+)
+        max_dim = max(image.size)
+        if max_dim > _MAX_OCR_DIMENSION:
+            scale = _MAX_OCR_DIMENSION / max_dim
+            new_size = (int(image.width * scale), int(image.height * scale))
+            image = image.resize(new_size, Image.LANCZOS)
 
         variants: list[dict[str, Any]] = [
             {"name": "original", "bytes": self._to_png_bytes(image)},

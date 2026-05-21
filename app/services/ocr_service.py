@@ -42,7 +42,10 @@ class OCRService:
             return result
 
         if self.engine == "tesseract":
-            return self._extract_with_tesseract(variants)
+            # Performance optimization: only run Tesseract on the preferred variant
+            # instead of all 4 variants. This reduces initial OCR from ~40s to ~10s.
+            preferred_variant = self.preprocessor.select_preferred_variant(variants)
+            return self._extract_with_tesseract([preferred_variant])
 
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
