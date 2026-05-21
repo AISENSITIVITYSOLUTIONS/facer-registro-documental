@@ -112,27 +112,53 @@ def nombres_coinciden(nombre_ine: str, nombre_db: str, umbral: float = 0.75) -> 
     """Compare the name extracted from the INE against the name registered in the DB.
 
     Returns True if the similarity ratio is >= *umbral* (75% by default).
-    Uses SequenceMatcher after normalizing both names (uppercase, no accents).
-    Also tries token-sorted comparison to handle name order differences
-    (INE uses apellidos-primero, DB may use nombre-primero).
+    Uses three strategies and picks the best score:
+    1. Direct SequenceMatcher comparison
+    2. Token-sorted comparison (handles name order differences)
+    3. Token coverage: checks if significant DB name tokens appear in the INE
+       text (handles OCR noise where extra garbage words are mixed in)
     """
     nombre_ine_norm = _normalize_name(nombre_ine)
     nombre_db_norm = _normalize_name(nombre_db)
 
-    # Direct comparison
+    # Strategy 1: Direct comparison
     similitud_directa = SequenceMatcher(None, nombre_ine_norm, nombre_db_norm).ratio()
 
-    # Token-sorted comparison (handles name order differences)
+    # Strategy 2: Token-sorted comparison (handles name order differences)
     ine_sorted = " ".join(sorted(nombre_ine_norm.split()))
     db_sorted = " ".join(sorted(nombre_db_norm.split()))
     similitud_sorted = SequenceMatcher(None, ine_sorted, db_sorted).ratio()
 
-    # Use the best of both comparisons
-    similitud = max(similitud_directa, similitud_sorted)
+    # Strategy 3: Token coverage — for each significant DB token, find the best
+    # matching INE token. This handles noisy OCR where real name parts are mixed
+    # with garbage characters (e.g., "ES DE ALBA EMOS NN" still contains "ALBA").
+    db_tokens = nombre_db_norm.split()
+    ine_tokens = nombre_ine_norm.split()
+    token_coverage = 0.0
+
+    if db_tokens and ine_tokens:
+        significant_db_tokens = [t for t in db_tokens if len(t) > 2]
+        if significant_db_tokens:
+            matched_count = 0
+            for db_token in significant_db_tokens:
+                best_match = 0.0
+                for ine_token in ine_tokens:
+                    # Check containment (handles merged OCR like "FELPEDEJESUS")
+                    if db_token in ine_token or ine_token in db_token:
+                        best_match = 1.0
+                        break
+                    ratio = SequenceMatcher(None, db_token, ine_token).ratio()
+                    best_match = max(best_match, ratio)
+                if best_match >= 0.7:
+                    matched_count += 1
+            token_coverage = matched_count / len(significant_db_tokens)
+
+    # Use the best of all strategies
+    similitud = max(similitud_directa, similitud_sorted, token_coverage)
 
     logger.info(
-        "nombres_coinciden: INE=%r, DB=%r, directa=%.4f, sorted=%.4f, best=%.4f, umbral=%.2f",
-        nombre_ine_norm, nombre_db_norm, similitud_directa, similitud_sorted, similitud, umbral,
+        "nombres_coinciden: INE=%r, DB=%r, directa=%.4f, sorted=%.4f, coverage=%.4f, best=%.4f, umbral=%.2f",
+        nombre_ine_norm, nombre_db_norm, similitud_directa, similitud_sorted, token_coverage, similitud, umbral,
     )
     return similitud >= umbral
 
@@ -409,16 +435,26 @@ async def upload_and_process_document(
             extracted_fields: dict[str, Any] = ine_fields
 
             # ── Validate INE name against registered user ────────────────
-            nombre_ine = ine_fields.get("nombre_completo") or ""
+            # Build the INE name from individual parts (more reliable than
+            # nombre_completo which can contain OCR garbage from nearby fields).
+            ine_nombre = ine_fields.get("nombre") or ""
+            ine_ap = ine_fields.get("apellido_paterno") or ""
+            ine_am = ine_fields.get("apellido_materno") or ""
+            # Fallback to nombre_completo only if individual parts are empty
+            nombre_ine = " ".join(filter(None, [ine_ap, ine_am, ine_nombre]))
+            if not nombre_ine.strip():
+                nombre_ine = ine_fields.get("nombre_completo") or ""
+
             nombre_usuario = " ".join(filter(None, [
                 getattr(user, "first_name", "") or "",
                 getattr(user, "last_name", "") or "",
             ]))
+
             if nombre_ine and nombre_usuario:
                 if not nombres_coinciden(nombre_ine, nombre_usuario):
                     logger.warning(
-                        "INE name mismatch for user_id=%s: INE=%r vs DB=%r",
-                        user_id, nombre_ine, nombre_usuario,
+                        "INE name mismatch for user_id=%s: INE=%r vs DB=%r (parts: nombre=%r, ap=%r, am=%r)",
+                        user_id, nombre_ine, nombre_usuario, ine_nombre, ine_ap, ine_am,
                     )
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
@@ -912,28 +948,17 @@ async def retry_document(
 
 @router.get("/debug-name-comparison")
 def debug_name_comparison(nombre_ine: str, nombre_db: str):
-    """Temporary debug endpoint to verify token-sorted name comparison is deployed."""
+    """Temporary debug endpoint to verify name comparison logic."""
+    match_result = nombres_coinciden(nombre_ine, nombre_db)
+
     nombre_ine_norm = _normalize_name(nombre_ine)
     nombre_db_norm = _normalize_name(nombre_db)
-
-    similitud_directa = SequenceMatcher(None, nombre_ine_norm, nombre_db_norm).ratio()
-
-    ine_sorted = " ".join(sorted(nombre_ine_norm.split()))
-    db_sorted = " ".join(sorted(nombre_db_norm.split()))
-    similitud_sorted = SequenceMatcher(None, ine_sorted, db_sorted).ratio()
-
-    similitud = max(similitud_directa, similitud_sorted)
 
     return {
         "nombre_ine_original": nombre_ine,
         "nombre_db_original": nombre_db,
         "nombre_ine_normalized": nombre_ine_norm,
         "nombre_db_normalized": nombre_db_norm,
-        "ine_sorted": ine_sorted,
-        "db_sorted": db_sorted,
-        "similitud_directa": round(similitud_directa, 4),
-        "similitud_sorted": round(similitud_sorted, 4),
-        "similitud_best": round(similitud, 4),
-        "match": similitud >= 0.75,
-        "version": "3.1.0-token-sorted",
+        "match": match_result,
+        "version": "3.1.0-token-coverage",
     }

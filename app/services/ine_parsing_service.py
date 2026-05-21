@@ -169,6 +169,13 @@ class INEParsingService:
         first_word = cleaned.split()[0] if cleaned.split() else ""
         if first_word in cls._NOT_A_NAME:
             return False
+        # Reject if less than 50% of non-space characters are alphabetic
+        # (filters out OCR noise like "ES DE ALBA Emos: NN" → keep, but "a. >= +=)" → reject)
+        non_space = value.replace(" ", "")
+        if non_space:
+            alpha_ratio = sum(1 for c in non_space if c.isalpha()) / len(non_space)
+            if alpha_ratio < 0.5:
+                return False
         return True
 
     # ── Name Block Extraction (Modern INE) ─────────────────────────────────
@@ -206,8 +213,13 @@ class INEParsingService:
         name_lines: list[str] = []
 
         # If there's a value on the NOMBRE line itself, include it
+        # BUT skip it if it contains stop labels (e.g., "FECHA DE NACIMIENTO"
+        # which appears on the same line in noisy OCR from photos)
         if value_on_line and len(value_on_line) > 1 and self._looks_like_name(value_on_line):
-            name_lines.append(value_on_line)
+            if not self._is_label_line(value_on_line) and not re.search(
+                r"FECHA|NACIMIENTO|DOMICILIO|SEXO", value_on_line
+            ):
+                name_lines.append(value_on_line)
 
         # Read subsequent lines until we hit a known label or non-name content
         for i in range(nombre_idx + 1, min(nombre_idx + 5, len(lines))):
