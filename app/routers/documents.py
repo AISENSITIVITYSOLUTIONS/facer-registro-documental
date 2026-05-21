@@ -423,7 +423,8 @@ async def upload_and_process_document(
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail=(
-                            "La validación no tuvo éxito: Verifica que el documento cargado sea el correcto."
+                            f"La validación no tuvo éxito: Verifica que el documento cargado sea el correcto. "
+                            f"[DEBUG: INE='{nombre_ine}' vs DB='{nombre_usuario}']"
                         ),
                     )
 
