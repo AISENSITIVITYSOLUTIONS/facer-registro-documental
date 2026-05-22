@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     gcs_bucket_name: str = ""
     gcs_documents_prefix: str = "documents"
 
-    default_ocr_engine: str = "tesseract"
+    default_ocr_engine: str = "google_vision"
     vision_feature_type: str = "DOCUMENT_TEXT_DETECTION"
     tesseract_languages: str = "spa+eng"
     tesseract_page_segmentation_mode: int = 6

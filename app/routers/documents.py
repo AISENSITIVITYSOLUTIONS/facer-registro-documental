@@ -534,11 +534,11 @@ async def upload_and_process_document(
         db.refresh(document)
 
         # ── Only expose nombre_completo to the frontend (privacy) ───────────
-        # All fields are stored in the DB, but the API response only
-        # returns the full name for display purposes.
-        sanitized_fields = _sanitize_for_json(extracted_fields)
+        # Use the full name from the database (biometria-api) instead of
+        # the OCR-extracted name which can be noisy/inaccurate.
+        nombre_completo_db = f"{user.nombre} {user.a_paterno} {user.a_materno}".strip()
         safe_fields_for_frontend: dict[str, Any] = {
-            "nombre_completo": sanitized_fields.get("nombre_completo") or sanitized_fields.get("full_name"),
+            "nombre_completo": nombre_completo_db,
         }
 
         return DocumentProcessResponse(
@@ -762,8 +762,11 @@ def process_document(document_id: int, db: Session = Depends(get_db)) -> Documen
         )
         db.commit()
         db.refresh(document)
-
-        sanitized_fields = _sanitize_for_json(extracted_fields)
+        # Use nombre_completo from DB (biometria-api) instead of OCR extraction
+        nombre_completo_db = f"{user.nombre} {user.a_paterno} {user.a_materno}".strip()
+        safe_fields_for_frontend: dict[str, Any] = {
+            "nombre_completo": nombre_completo_db,
+        }
         return DocumentProcessResponse(
             id=document.id,
             uuid=document.uuid,
@@ -773,7 +776,7 @@ def process_document(document_id: int, db: Session = Depends(get_db)) -> Documen
             comparison_score=document.comparison_score,
             extraction_confidence=document.extraction_confidence,
             capture_quality_score=document.capture_quality_score,
-            extracted_fields=sanitized_fields,
+            extracted_fields=safe_fields_for_frontend,
         )
     except HTTPException:
         db.rollback()
